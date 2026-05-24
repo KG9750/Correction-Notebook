@@ -378,7 +378,7 @@ function NotebookScreen({
       <ScrollView contentContainerStyle={styles.detailContent} style={styles.detailPane}>
         <View style={styles.detailHero}>
           <View style={styles.problemImage}>
-            {selectedMistake.cropped_image_uri ? <Image source={{ uri: selectedMistake.cropped_image_uri }} style={styles.previewImage} /> : <Text style={styles.problemImageText}>原题图片 / 裁切图</Text>}
+            {selectedMistake.cropped_image_uri ? <Image source={{ uri: selectedMistake.cropped_image_uri }} style={styles.previewImage} resizeMode="contain" /> : <Text style={styles.problemImageText}>原题图片 / 裁切图</Text>}
           </View>
           <View style={styles.problemText}>
             {isEditing ? (
@@ -969,7 +969,7 @@ const styles = StyleSheet.create({
   problemImage: {
     flexGrow: 1,
     flexBasis: 300,
-    minHeight: 220,
+    maxHeight: 440,
     borderRadius: 8,
     backgroundColor: "#ffffff",
     borderWidth: 1,
