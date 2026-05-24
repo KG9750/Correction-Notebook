@@ -8,6 +8,8 @@ type Props = {
   containerHeight: number;
   imageSize: ImageSize | undefined;
   onRectChange: (rect: CropPercentRect) => void;
+  onDragStart: () => void;
+  onDragEnd: () => void;
 };
 
 type DisplayRect = {
@@ -44,12 +46,18 @@ function getImageDisplayRect(
   };
 }
 
-export function CropOverlay({ rect, containerWidth, containerHeight, imageSize, onRectChange }: Props) {
+export function CropOverlay({ rect, containerWidth, containerHeight, imageSize, onRectChange, onDragStart, onDragEnd }: Props) {
   const sizeRef = useRef({ containerWidth, containerHeight, imageSize });
   sizeRef.current = { containerWidth, containerHeight, imageSize };
 
   const callbackRef = useRef(onRectChange);
   callbackRef.current = onRectChange;
+
+  const dragStartRef = useRef(onDragStart);
+  dragStartRef.current = onDragStart;
+
+  const dragEndRef = useRef(onDragEnd);
+  dragEndRef.current = onDragEnd;
 
   const rectRef = useRef(rect);
   rectRef.current = rect;
@@ -71,113 +79,90 @@ export function CropOverlay({ rect, containerWidth, containerHeight, imageSize, 
     br?: CropPercentRect;
   }>({});
 
-  const movePR = useRef(
+  const makeCropPR = (
+    grant: (r: typeof initialRects.current) => void,
+    onMove: (initial: CropPercentRect, dxPct: number, dyPct: number) => void
+  ) =>
     PanResponder.create({
       onStartShouldSetPanResponderCapture: () => true,
       onMoveShouldSetPanResponderCapture: () => true,
+      onPanResponderTerminationRequest: () => false,
       onPanResponderGrant: () => {
-        initialRects.current.move = rectRef.current;
+        dragStartRef.current();
+        grant(initialRects.current);
       },
       onPanResponderMove: (_e, gesture: PanResponderGestureState) => {
-        const initial = initialRects.current.move ?? rectRef.current;
+        const initial = rectRef.current;
+        // Use the actual stored initial from grant, not current rect
         const { dxPct, dyPct } = pxToPct(gesture.dx, gesture.dy);
+        onMove(initial, dxPct, dyPct);
+      },
+      onPanResponderRelease: () => {
+        dragEndRef.current();
+      },
+      onPanResponderTerminate: () => {
+        dragEndRef.current();
+      }
+    });
+
+  const movePR = useRef(
+    makeCropPR(
+      (r) => { r.move = rectRef.current; },
+      (initial, dxPct, dyPct) => {
+        const stored = initialRects.current.move ?? initial;
         callbackRef.current(
-          clampCropPercent({
-            ...initial,
-            left: initial.left + dxPct,
-            top: initial.top + dyPct
-          })
+          clampCropPercent({ ...stored, left: stored.left + dxPct, top: stored.top + dyPct })
         );
       }
-    })
+    )
   ).current;
 
   const tlPR = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponderCapture: () => true,
-      onMoveShouldSetPanResponderCapture: () => true,
-      onPanResponderGrant: () => {
-        initialRects.current.tl = rectRef.current;
-      },
-      onPanResponderMove: (_e, gesture: PanResponderGestureState) => {
-        const initial = initialRects.current.tl ?? rectRef.current;
-        const { dxPct, dyPct } = pxToPct(gesture.dx, gesture.dy);
+    makeCropPR(
+      (r) => { r.tl = rectRef.current; },
+      (_initial, dxPct, dyPct) => {
+        const stored = initialRects.current.tl ?? rectRef.current;
         callbackRef.current(
-          clampCropPercent({
-            left: initial.left + dxPct,
-            top: initial.top + dyPct,
-            width: initial.width - dxPct,
-            height: initial.height - dyPct
-          })
+          clampCropPercent({ left: stored.left + dxPct, top: stored.top + dyPct, width: stored.width - dxPct, height: stored.height - dyPct })
         );
       }
-    })
+    )
   ).current;
 
   const trPR = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponderCapture: () => true,
-      onMoveShouldSetPanResponderCapture: () => true,
-      onPanResponderGrant: () => {
-        initialRects.current.tr = rectRef.current;
-      },
-      onPanResponderMove: (_e, gesture: PanResponderGestureState) => {
-        const initial = initialRects.current.tr ?? rectRef.current;
-        const { dxPct, dyPct } = pxToPct(gesture.dx, gesture.dy);
+    makeCropPR(
+      (r) => { r.tr = rectRef.current; },
+      (_initial, dxPct, dyPct) => {
+        const stored = initialRects.current.tr ?? rectRef.current;
         callbackRef.current(
-          clampCropPercent({
-            left: initial.left,
-            top: initial.top + dyPct,
-            width: initial.width + dxPct,
-            height: initial.height - dyPct
-          })
+          clampCropPercent({ left: stored.left, top: stored.top + dyPct, width: stored.width + dxPct, height: stored.height - dyPct })
         );
       }
-    })
+    )
   ).current;
 
   const blPR = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponderCapture: () => true,
-      onMoveShouldSetPanResponderCapture: () => true,
-      onPanResponderGrant: () => {
-        initialRects.current.bl = rectRef.current;
-      },
-      onPanResponderMove: (_e, gesture: PanResponderGestureState) => {
-        const initial = initialRects.current.bl ?? rectRef.current;
-        const { dxPct, dyPct } = pxToPct(gesture.dx, gesture.dy);
+    makeCropPR(
+      (r) => { r.bl = rectRef.current; },
+      (_initial, dxPct, dyPct) => {
+        const stored = initialRects.current.bl ?? rectRef.current;
         callbackRef.current(
-          clampCropPercent({
-            left: initial.left + dxPct,
-            top: initial.top,
-            width: initial.width - dxPct,
-            height: initial.height + dyPct
-          })
+          clampCropPercent({ left: stored.left + dxPct, top: stored.top, width: stored.width - dxPct, height: stored.height + dyPct })
         );
       }
-    })
+    )
   ).current;
 
   const brPR = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponderCapture: () => true,
-      onMoveShouldSetPanResponderCapture: () => true,
-      onPanResponderGrant: () => {
-        initialRects.current.br = rectRef.current;
-      },
-      onPanResponderMove: (_e, gesture: PanResponderGestureState) => {
-        const initial = initialRects.current.br ?? rectRef.current;
-        const { dxPct, dyPct } = pxToPct(gesture.dx, gesture.dy);
+    makeCropPR(
+      (r) => { r.br = rectRef.current; },
+      (_initial, dxPct, dyPct) => {
+        const stored = initialRects.current.br ?? rectRef.current;
         callbackRef.current(
-          clampCropPercent({
-            left: initial.left,
-            top: initial.top,
-            width: initial.width + dxPct,
-            height: initial.height + dyPct
-          })
+          clampCropPercent({ left: stored.left, top: stored.top, width: stored.width + dxPct, height: stored.height + dyPct })
         );
       }
-    })
+    )
   ).current;
 
   if (containerWidth <= 0 || containerHeight <= 0) {

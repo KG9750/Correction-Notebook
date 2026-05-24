@@ -165,6 +165,7 @@ function CaptureScreen({ onCaptured }: { onCaptured: (input: { imageUri?: string
   const [imageSize, setImageSize] = useState<ImageSize | undefined>();
   const [cropRect, setCropRect] = useState<CropPercentRect>({ left: 8, top: 8, width: 84, height: 64 });
   const [containerSize, setContainerSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  const [scrollEnabled, setScrollEnabled] = useState(true);
   const [isCropping, setIsCropping] = useState(false);
   const [ocrText, setOcrText] = useState("");
   const [studentAnswer, setStudentAnswer] = useState("");
@@ -240,8 +241,11 @@ function CaptureScreen({ onCaptured }: { onCaptured: (input: { imageUri?: string
     await runOcr(originalImageUri);
   };
 
+  const imageAspect = imageSize ? imageSize.width / imageSize.height : undefined;
+  const previewHeight = imageAspect && containerSize.width > 0 ? containerSize.width / imageAspect : undefined;
+
   return (
-    <ScrollView contentContainerStyle={styles.screen}>
+    <ScrollView scrollEnabled={scrollEnabled} contentContainerStyle={styles.screen}>
       <View style={styles.screenHeader}>
         <Text style={styles.pageTitle}>拍题并确认 OCR</Text>
         <Text style={styles.pageSubtitle}>图片可先离线保存，OCR 和 AI 分析失败也不会阻止归档。</Text>
@@ -249,7 +253,7 @@ function CaptureScreen({ onCaptured }: { onCaptured: (input: { imageUri?: string
       <View style={styles.captureLayout}>
         <View style={styles.captureMediaColumn}>
           <View
-            style={styles.capturePreview}
+            style={[styles.capturePreview, previewHeight ? { height: previewHeight, flexGrow: 0 } : undefined]}
             onLayout={(event) => {
               const { width, height } = event.nativeEvent.layout;
               setContainerSize({ width, height });
@@ -263,6 +267,8 @@ function CaptureScreen({ onCaptured }: { onCaptured: (input: { imageUri?: string
                 containerHeight={containerSize.height}
                 imageSize={imageSize}
                 onRectChange={setCropRect}
+                onDragStart={() => setScrollEnabled(false)}
+                onDragEnd={() => setScrollEnabled(true)}
               />
             ) : null}
           </View>
