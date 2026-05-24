@@ -63,8 +63,8 @@ export function latexToReadableMath(value: string): string {
     .replace(/\\times/g, "×")
     .replace(/\\div/g, "÷")
     .replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, "($1)/($2)")
-    .replace(/([A-Za-z0-9)\]}])\^\{([0-9+-]+)\}/g, (_, base: string, exponent: string) => `${base}${toSuperscript(exponent)}`)
-    .replace(/([A-Za-z0-9)\]}])\^([0-9+-])/g, (_, base: string, exponent: string) => `${base}${toSuperscript(exponent)}`);
+    .replace(/([A-Za-z0-9)\]}])\s*\^\s*\{\s*([0-9+-]+)\s*\}/g, (_, base: string, exponent: string) => `${base}${toSuperscript(exponent)}`)
+    .replace(/([A-Za-z0-9)\]}])\s*\^\s*([0-9+-])/g, (_, base: string, exponent: string) => `${base}${toSuperscript(exponent)}`);
 }
 
 function toSuperscript(value: string): string {

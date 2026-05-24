@@ -15,7 +15,7 @@ import {
   useWindowDimensions,
   View
 } from "react-native";
-import { adjustCropRect, percentRectToPixelCrop, type CropPercentRect, type ImageSize } from "./crop/rect";
+import { percentRectToPixelCrop, type CropPercentRect, type ImageSize } from "./crop/rect";
 import { CropOverlay } from "./crop/CropOverlay";
 import { buildAnswerPaperHtml, buildStudentPaperHtml } from "./print/paperHtml";
 import { printHtml, sharePdf } from "./print/actions";
@@ -278,17 +278,7 @@ function CaptureScreen({ onCaptured }: { onCaptured: (input: { imageUri?: string
           </View>
           {imageUri ? (
             <View style={styles.cropPanel}>
-              <Text style={styles.inputLabel}>框出错题区域</Text>
-              <View style={styles.cropGrid}>
-                <CropStepper label="上移" icon="arrow-up-outline" onPress={() => setCropRect((rect) => adjustCropRect(rect, "top", -3))} />
-                <CropStepper label="下移" icon="arrow-down-outline" onPress={() => setCropRect((rect) => adjustCropRect(rect, "top", 3))} />
-                <CropStepper label="左移" icon="arrow-back-outline" onPress={() => setCropRect((rect) => adjustCropRect(rect, "left", -3))} />
-                <CropStepper label="右移" icon="arrow-forward-outline" onPress={() => setCropRect((rect) => adjustCropRect(rect, "left", 3))} />
-                <CropStepper label="变窄" icon="remove-outline" onPress={() => setCropRect((rect) => adjustCropRect(rect, "width", -4))} />
-                <CropStepper label="变宽" icon="add-outline" onPress={() => setCropRect((rect) => adjustCropRect(rect, "width", 4))} />
-                <CropStepper label="变矮" icon="remove-circle-outline" onPress={() => setCropRect((rect) => adjustCropRect(rect, "height", -4))} />
-                <CropStepper label="变高" icon="add-circle-outline" onPress={() => setCropRect((rect) => adjustCropRect(rect, "height", 4))} />
-              </View>
+              <Text style={styles.inputLabel}>框出错题区域 — 拖拽橙色框和四角圆点来调整</Text>
               <View style={styles.previewActions}>
                 <SecondaryButton icon="crop-outline" label={isCropping ? "裁剪中" : "应用裁剪并重新 OCR"} onPress={applyCrop} />
                 <SecondaryButton icon="refresh-outline" label="重置原图" onPress={resetCrop} />
@@ -562,15 +552,6 @@ function SecondaryButton({ icon, label, onPress }: { icon: keyof typeof Ionicons
     <Pressable style={styles.secondaryButton} onPress={onPress}>
       <Ionicons name={icon} size={18} color="#0b4a6f" />
       <Text style={styles.secondaryButtonText}>{label}</Text>
-    </Pressable>
-  );
-}
-
-function CropStepper({ icon, label, onPress }: { icon: keyof typeof Ionicons.glyphMap; label: string; onPress: () => void }) {
-  return (
-    <Pressable style={styles.cropStepper} onPress={onPress}>
-      <Ionicons name={icon} size={16} color="#0b4a6f" />
-      <Text style={styles.cropStepperText}>{label}</Text>
     </Pressable>
   );
 }
@@ -859,30 +840,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#ffffff",
     padding: 12,
     gap: 10
-  },
-  cropGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-    justifyContent: "center"
-  },
-  cropStepper: {
-    minHeight: 36,
-    minWidth: 72,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#bdd7e1",
-    paddingHorizontal: 9,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 5,
-    backgroundColor: "#f7fbfc"
-  },
-  cropStepperText: {
-    fontSize: 12,
-    color: "#0b4a6f",
-    fontWeight: "700"
   },
   formPanel: {
     flexGrow: 1,
