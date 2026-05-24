@@ -4,6 +4,7 @@ import {
   nextReviewDueForMastery,
   nowIso,
   type AIAnalysis,
+  type GeneratedQuestion,
   type Mistake,
   type PracticeAttempt,
   type TestPaper
@@ -52,13 +53,15 @@ export function addCapturedMistake(state: NotebookState, input: { imageUri?: str
   };
 
   const analysis = createLocalAnalysis(mistake);
+  const questions = createLocalPracticeQuestions(mistake);
 
   return {
     ...state,
     activeSection: "notebook",
     selectedMistakeId: mistake.id,
     mistakes: [mistake, ...state.mistakes],
-    analyses: [analysis, ...state.analyses]
+    analyses: [analysis, ...state.analyses],
+    generatedQuestions: [...questions, ...state.generatedQuestions]
   };
 }
 
@@ -93,6 +96,59 @@ function createLocalAnalysis(mistake: Mistake): AIAnalysis {
     model_name: "offline-template",
     created_at: nowIso()
   };
+}
+
+function createLocalPracticeQuestions(mistake: Mistake): GeneratedQuestion[] {
+  const point = mistake.knowledge_points[0] ?? "一元一次方程";
+  const timestamp = nowIso();
+
+  return [
+    {
+      id: createId("local_gq"),
+      mistake_id: mistake.id,
+      question_text: "一根绳子剪去 8 米后还剩 17 米，原来长多少米？请列方程解答。",
+      difficulty: "basic",
+      question_type: "same_pattern",
+      estimated_time_seconds: 90,
+      answer: "x = 25",
+      solution_steps: ["设原来长 x 米。", "根据原长 - 剪去 = 剩下，列 x - 8 = 17。", "解得 x = 25。"],
+      knowledge_points: [point],
+      target_error_type: mistake.main_error_type ?? "方法性错误",
+      why_related_to_original_mistake: "同样检查是否能把总量、部分量和剩余量放进正确的等量关系。",
+      verification_status: "passed",
+      created_at: timestamp
+    },
+    {
+      id: createId("local_gq"),
+      mistake_id: mistake.id,
+      question_text: "一本书读了 35 页后，还剩全书的 3/5。全书一共有多少页？",
+      difficulty: "standard",
+      question_type: "condition_change",
+      estimated_time_seconds: 150,
+      answer: "87.5 页",
+      solution_steps: ["设全书 x 页。", "已经读的页数是全书的 2/5。", "列 2x/5 = 35。", "解得 x = 87.5。"],
+      knowledge_points: [point],
+      target_error_type: mistake.main_error_type ?? "方法性错误",
+      why_related_to_original_mistake: "条件从具体数量变成分率，仍然考查能否找准等量关系。",
+      verification_status: "passed",
+      created_at: timestamp
+    },
+    {
+      id: createId("local_gq"),
+      mistake_id: mistake.id,
+      question_text: "甲数比乙数的 2 倍少 5，甲数是 19。乙数是多少？",
+      difficulty: "standard",
+      question_type: "trap",
+      estimated_time_seconds: 150,
+      answer: "x = 12",
+      solution_steps: ["设乙数为 x。", "甲数 = 2x - 5。", "列 2x - 5 = 19。", "解得 x = 12。"],
+      knowledge_points: [point],
+      target_error_type: mistake.main_error_type ?? "方法性错误",
+      why_related_to_original_mistake: '容易把"少 5"写反，用来检测关系方向错误是否复发。',
+      verification_status: "passed",
+      created_at: timestamp
+    }
+  ];
 }
 
 export function updateMistake(
