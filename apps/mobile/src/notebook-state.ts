@@ -66,21 +66,32 @@ export function addCapturedMistake(state: NotebookState, input: { imageUri?: str
 }
 
 function createLocalAnalysis(mistake: Mistake): AIAnalysis {
-  const text = `${mistake.normalized_question_text} ${mistake.ocr_text} ${mistake.student_answer}`;
-  const isEquation = /方程|等量|x|未知数|解|设/.test(text);
-  const confidence = text.trim().length < 20 ? 0.52 : 0.84;
+  const questionText = mistake.normalized_question_text || mistake.ocr_text;
+  const combined = `${questionText} ${mistake.student_answer}`;
+  const isEquation = /方程|等量|x|未知数|解|设/.test(combined);
+  const isWordProblem = /米|元|页|个|只|本|支|根|条|块/.test(combined);
+  const confidence = combined.trim().length < 20 ? 0.52 : 0.84;
+
+  const studentAnswer = mistake.student_answer || "未填写";
+  const answerSummary = studentAnswer.length > 30 ? studentAnswer.slice(0, 30) + "…" : studentAnswer;
+
+  const summary = isEquation
+    ? `"${questionText.slice(0, 60)}" 这道题主要问题在于没有先找准等量关系，你写的答案是「${answerSummary}」，说明关系方向可能反了。`
+    : isWordProblem
+      ? `"${questionText.slice(0, 60)}" 你写的答案是「${answerSummary}」— 错误集中在解题前半段的条件识别或方法选择上。`
+      : `这道题的关键不是把答案背下来，而是把条件、方法和易错步骤重新理清。`;
+
+  const wrongStep = isEquation
+    ? `你把「${answerSummary}」直接算出来了，但中间没有先区分条件里的数量属于总量、部分量还是结果。`
+    : `你写的「${answerSummary}」表明错误发生在读题或方法选择阶段。`;
 
   return {
     id: createId("local_analysis"),
     mistake_id: mistake.id,
     main_error_type: "方法性错误",
     secondary_error_types: ["审题性错误"],
-    error_summary: isEquation
-      ? "这道题主要问题在于没有先找准等量关系，导致后面的方程方向错了。"
-      : "这道题的关键不是把答案背下来，而是把条件、方法和易错步骤重新理清。",
-    wrong_step_location: isEquation
-      ? "你把题目里的数量关系直接代入计算，但没有先区分总量、部分量和问题要求。"
-      : "错误集中在解题前半段的条件识别或方法选择上。",
+    error_summary: summary,
+    wrong_step_location: wrongStep,
     correct_solution_steps: isEquation
       ? ["设未知数 x。", "圈出题目中的总量和部分量。", "根据等量关系列方程。", "解方程并回代检查。"]
       : ["先读清题目求什么。", "写出已知条件。", "选择对应方法解题。", "把答案代回题目检查。"],
@@ -100,20 +111,27 @@ function createLocalAnalysis(mistake: Mistake): AIAnalysis {
 
 function createLocalPracticeQuestions(mistake: Mistake): GeneratedQuestion[] {
   const point = mistake.knowledge_points[0] ?? "一元一次方程";
+  const questionText = mistake.normalized_question_text || mistake.ocr_text;
+  const numbers = extractNumbers(questionText);
   const timestamp = nowIso();
+  const target = mistake.main_error_type ?? "方法性错误";
+
+  const a = numbers[0] ?? 8;
+  const b = numbers[1] ?? 17;
+  const c = numbers[2] ?? 5;
 
   return [
     {
       id: createId("local_gq"),
       mistake_id: mistake.id,
-      question_text: "一根绳子剪去 8 米后还剩 17 米，原来长多少米？请列方程解答。",
+      question_text: `一根绳子剪去 ${a} 米后还剩 ${b} 米，原来长多少米？请列方程解答。`,
       difficulty: "basic",
       question_type: "same_pattern",
       estimated_time_seconds: 90,
-      answer: "x = 25",
-      solution_steps: ["设原来长 x 米。", "根据原长 - 剪去 = 剩下，列 x - 8 = 17。", "解得 x = 25。"],
+      answer: `x = ${a + b}`,
+      solution_steps: ["设原来长 x 米。", `根据原长 - 剪去 = 剩下，列 x - ${a} = ${b}。`, `解得 x = ${a + b}。`],
       knowledge_points: [point],
-      target_error_type: mistake.main_error_type ?? "方法性错误",
+      target_error_type: target,
       why_related_to_original_mistake: "同样检查是否能把总量、部分量和剩余量放进正确的等量关系。",
       verification_status: "passed",
       created_at: timestamp
@@ -121,14 +139,14 @@ function createLocalPracticeQuestions(mistake: Mistake): GeneratedQuestion[] {
     {
       id: createId("local_gq"),
       mistake_id: mistake.id,
-      question_text: "一本书读了 35 页后，还剩全书的 3/5。全书一共有多少页？",
+      question_text: `一本书读了 ${a + b} 页后，还剩全书的 3/5。全书一共有多少页？`,
       difficulty: "standard",
       question_type: "condition_change",
       estimated_time_seconds: 150,
-      answer: "87.5 页",
-      solution_steps: ["设全书 x 页。", "已经读的页数是全书的 2/5。", "列 2x/5 = 35。", "解得 x = 87.5。"],
+      answer: `x = ${Math.round(((a + b) * 5) / 2)} 页`,
+      solution_steps: ["设全书 x 页。", `已经读的页数是全书的 2/5。`, `列 2x/5 = ${a + b}。`, `解得 x = ${Math.round(((a + b) * 5) / 2)}。`],
       knowledge_points: [point],
-      target_error_type: mistake.main_error_type ?? "方法性错误",
+      target_error_type: target,
       why_related_to_original_mistake: "条件从具体数量变成分率，仍然考查能否找准等量关系。",
       verification_status: "passed",
       created_at: timestamp
@@ -136,19 +154,24 @@ function createLocalPracticeQuestions(mistake: Mistake): GeneratedQuestion[] {
     {
       id: createId("local_gq"),
       mistake_id: mistake.id,
-      question_text: "甲数比乙数的 2 倍少 5，甲数是 19。乙数是多少？",
+      question_text: `甲数比乙数的 ${a} 倍少 ${c}，甲数是 ${a * b}。乙数是多少？`,
       difficulty: "standard",
       question_type: "trap",
       estimated_time_seconds: 150,
-      answer: "x = 12",
-      solution_steps: ["设乙数为 x。", "甲数 = 2x - 5。", "列 2x - 5 = 19。", "解得 x = 12。"],
+      answer: `x = ${b + c}`,
+      solution_steps: ["设乙数为 x。", `甲数 = ${a}x - ${c}。`, `列 ${a}x - ${c} = ${a * b}。`, `解得 x = ${b + c}。`],
       knowledge_points: [point],
-      target_error_type: mistake.main_error_type ?? "方法性错误",
-      why_related_to_original_mistake: '容易把"少 5"写反，用来检测关系方向错误是否复发。',
+      target_error_type: target,
+      why_related_to_original_mistake: '容易把"少 X"写反，用来检测关系方向错误是否复发。',
       verification_status: "passed",
       created_at: timestamp
     }
   ];
+}
+
+function extractNumbers(text: string): number[] {
+  const matches = text.match(/\d+/g);
+  return (matches ?? []).map(Number).filter((n) => n > 0 && n < 1000);
 }
 
 export function updateMistake(
