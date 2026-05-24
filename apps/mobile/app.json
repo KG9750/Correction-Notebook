@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "Correction Notebook",
+    "slug": "correction-notebook",
+    "scheme": "correction-notebook",
+    "version": "0.1.0",
+    "orientation": "default",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.leo.correctionnotebook",
+      "infoPlist": {
+        "NSCameraUsageDescription": "用于拍摄学生试卷错题并保存到错题本。",
+        "NSPhotoLibraryUsageDescription": "用于从相册导入试卷错题图片。"
+      }
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-camera",
+      "expo-image-picker"
+    ]
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "name": "@correction-notebook/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@correction-notebook/shared": "*",
+    "@expo/vector-icons": "^15.0.3",
+    "expo": "^54.0.25",
+    "expo-camera": "~17.0.9",
+    "expo-file-system": "~19.0.19",
+    "expo-image-manipulator": "~14.0.7",
+    "expo-image-picker": "~17.0.9",
+    "expo-print": "~15.0.7",
+    "expo-router": "~6.0.15",
+    "expo-sharing": "~14.0.7",
+    "expo-sqlite": "~16.0.9",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-screens": "~4.16.0",
+    "react-native-web": "^0.21.0",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@types/react": "~19.1.10",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.13"
+  }
+}

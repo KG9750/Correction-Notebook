@@ -1,0 +1,106 @@
+import { describe, expect, it } from "vitest";
+import {
+  computeMasteryFromPractice,
+  filterPassedQuestions,
+  nextReviewDueForMastery,
+  normalizeErrorTags,
+  reviewPriorityScore
+} from "./domain.js";
+import type { GeneratedQuestion, Mistake } from "./schemas.js";
+
+describe("mastery rules", () => {
+  it("maps 3-question practice results to the PRD mastery statuses", () => {
+    expect(computeMasteryFromPractice(3, 3)).toBe("mastered");
+    expect(computeMasteryFromPractice(3, 2)).toBe("partially_mastered");
+    expect(computeMasteryFromPractice(3, 1)).toBe("not_mastered");
+    expect(computeMasteryFromPractice(3, 0)).toBe("not_mastered");
+  });
+
+  it("maps 5-question practice results to the PRD mastery statuses", () => {
+    expect(computeMasteryFromPractice(5, 5)).toBe("mastered");
+    expect(computeMasteryFromPractice(5, 4)).toBe("mastered");
+    expect(computeMasteryFromPractice(5, 3)).toBe("partially_mastered");
+    expect(computeMasteryFromPractice(5, 2)).toBe("not_mastered");
+  });
+
+  it("sets review intervals after practice", () => {
+    const base = new Date("2026-05-23T00:00:00.000Z");
+    expect(nextReviewDueForMastery("partially_mastered", base)).toBe("2026-05-26T00:00:00.000Z");
+    expect(nextReviewDueForMastery("not_mastered", base)).toBe("2026-05-24T00:00:00.000Z");
+  });
+});
+
+describe("error tag rules", () => {
+  it("requires a valid main error and allows at most two secondary tags", () => {
+    const result = normalizeErrorTags({
+      main: "未知",
+      secondary: ["审题性错误", "过程性错误", "知识性错误"]
+    });
+
+    expect(result).toEqual({
+      main: "方法性错误",
+      secondary: ["审题性错误", "过程性错误"]
+    });
+  });
+});
+
+describe("review priority", () => {
+  it("puts not-mastered and due mistakes ahead of mastered mistakes", () => {
+    const baseMistake = {
+      id: "m_1",
+      student_id: "student_1",
+      subject: "math",
+      grade: "初一",
+      source_type: "exam_paper",
+      ocr_text: "应用题",
+      normalized_question_text: "应用题",
+      student_answer: "",
+      knowledge_points: ["一元一次方程"],
+      secondary_error_types: [],
+      needs_user_review: false,
+      created_at: "2026-05-20T00:00:00.000Z",
+      updated_at: "2026-05-20T00:00:00.000Z"
+    } satisfies Omit<Mistake, "mastery_status">;
+
+    const notMastered: Mistake = {
+      ...baseMistake,
+      mastery_status: "not_mastered",
+      review_due_at: "2026-05-22T00:00:00.000Z"
+    };
+    const mastered: Mistake = {
+      ...baseMistake,
+      mastery_status: "mastered",
+      review_due_at: "2026-05-30T00:00:00.000Z"
+    };
+
+    expect(reviewPriorityScore(notMastered, new Date("2026-05-23T00:00:00.000Z"))).toBeGreaterThan(
+      reviewPriorityScore(mastered, new Date("2026-05-23T00:00:00.000Z"))
+    );
+  });
+});
+
+describe("generated question safety", () => {
+  it("does not expose failed verification questions", () => {
+    const base = {
+      id: "gq",
+      mistake_id: "m_1",
+      question_text: "题目",
+      difficulty: "basic",
+      question_type: "same_pattern",
+      estimated_time_seconds: 120,
+      answer: "x=3",
+      solution_steps: ["列方程"],
+      knowledge_points: ["一元一次方程"],
+      target_error_type: "等量关系",
+      why_related_to_original_mistake: "仍然检查等量关系",
+      created_at: "2026-05-23T00:00:00.000Z"
+    } satisfies Omit<GeneratedQuestion, "verification_status">;
+
+    expect(
+      filterPassedQuestions([
+        { ...base, id: "passed", verification_status: "passed" },
+        { ...base, id: "failed", verification_status: "failed" }
+      ]).map((item) => item.id)
+    ).toEqual(["passed"]);
+  });
+});

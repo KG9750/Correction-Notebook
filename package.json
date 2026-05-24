@@ -1,0 +1,31 @@
+{
+  "name": "correction-notebook",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "services/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @correction-notebook/shared && npm run build -w @correction-notebook/ai && npm run build -w @correction-notebook/api && npm run typecheck -w @correction-notebook/mobile",
+    "dev:api": "npm run dev -w @correction-notebook/api",
+    "dev:mobile": "npm run start -w @correction-notebook/mobile",
+    "lint": "npm run typecheck",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "api:test": "npm run test -w @correction-notebook/api",
+    "mobile:test": "npm run test -w @correction-notebook/mobile",
+    "shared:test": "npm run test -w @correction-notebook/shared"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.13"
+  },
+  "dependencies": {
+    "zod": "^4.1.13"
+  }
+}
