@@ -255,12 +255,13 @@ function CaptureScreen({ onCaptured }: { onCaptured: (input: { imageUri?: string
               setContainerSize({ width, height });
             }}
           >
-            {imageUri ? <Image source={{ uri: imageUri }} style={styles.previewImage} resizeMode="cover" /> : <Text style={styles.previewText}>错题图片预览</Text>}
+            {imageUri ? <Image source={{ uri: imageUri }} style={styles.previewImage} resizeMode="contain" /> : <Text style={styles.previewText}>错题图片预览</Text>}
             {imageUri && originalImageUri === imageUri ? (
               <CropOverlay
                 rect={cropRect}
                 containerWidth={containerSize.width}
                 containerHeight={containerSize.height}
+                imageSize={imageSize}
                 onRectChange={setCropRect}
               />
             ) : null}
