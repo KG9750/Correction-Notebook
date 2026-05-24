@@ -16,6 +16,7 @@ import {
   View
 } from "react-native";
 import { adjustCropRect, percentRectToPixelCrop, type CropPercentRect, type ImageSize } from "./crop/rect";
+import { CropOverlay } from "./crop/CropOverlay";
 import { buildAnswerPaperHtml, buildStudentPaperHtml } from "./print/paperHtml";
 import { printHtml, sharePdf } from "./print/actions";
 import {
@@ -163,6 +164,7 @@ function CaptureScreen({ onCaptured }: { onCaptured: (input: { imageUri?: string
   const [originalImageUri, setOriginalImageUri] = useState<string | undefined>();
   const [imageSize, setImageSize] = useState<ImageSize | undefined>();
   const [cropRect, setCropRect] = useState<CropPercentRect>({ left: 8, top: 8, width: 84, height: 64 });
+  const [containerSize, setContainerSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
   const [isCropping, setIsCropping] = useState(false);
   const [ocrText, setOcrText] = useState("");
   const [studentAnswer, setStudentAnswer] = useState("");
@@ -246,20 +248,20 @@ function CaptureScreen({ onCaptured }: { onCaptured: (input: { imageUri?: string
       </View>
       <View style={styles.captureLayout}>
         <View style={styles.captureMediaColumn}>
-          <View style={styles.capturePreview}>
+          <View
+            style={styles.capturePreview}
+            onLayout={(event) => {
+              const { width, height } = event.nativeEvent.layout;
+              setContainerSize({ width, height });
+            }}
+          >
             {imageUri ? <Image source={{ uri: imageUri }} style={styles.previewImage} resizeMode="cover" /> : <Text style={styles.previewText}>错题图片预览</Text>}
             {imageUri && originalImageUri === imageUri ? (
-              <View
-                pointerEvents="none"
-                style={[
-                  styles.cropOverlay,
-                  {
-                    left: `${cropRect.left}%`,
-                    top: `${cropRect.top}%`,
-                    width: `${cropRect.width}%`,
-                    height: `${cropRect.height}%`
-                  }
-                ]}
+              <CropOverlay
+                rect={cropRect}
+                containerWidth={containerSize.width}
+                containerHeight={containerSize.height}
+                onRectChange={setCropRect}
               />
             ) : null}
           </View>
@@ -842,13 +844,6 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     justifyContent: "center",
     gap: 10
-  },
-  cropOverlay: {
-    position: "absolute",
-    borderWidth: 3,
-    borderColor: "#f59e0b",
-    backgroundColor: "rgba(245, 158, 11, 0.08)",
-    borderRadius: 4
   },
   cropPanel: {
     borderRadius: 8,

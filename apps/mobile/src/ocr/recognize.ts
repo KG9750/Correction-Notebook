@@ -78,7 +78,9 @@ function toSuperscript(value: string): string {
     "6": "⁶",
     "7": "⁷",
     "8": "⁸",
-    "9": "⁹"
+    "9": "⁹",
+    "+": "⁺",
+    "-": "⁻"
   };
   return value
     .split("")

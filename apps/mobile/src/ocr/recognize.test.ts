@@ -22,6 +22,7 @@ describe("OCR recognition adapter", () => {
 
   it("converts simple LaTeX superscripts into readable superscripts", () => {
     expect(latexToReadableMath("a^{2}+b^3+\\left(3x-y+2z\\right)^2")).toBe("a²+b³+(3x-y+2z)²");
+    expect(latexToReadableMath("x^{-2}+y^{+3}")).toBe("x⁻²+y⁺³");
   });
 
   it("returns editable OCR text with confidence from fallback provider", async () => {
