@@ -6,7 +6,7 @@ export type OcrResult = {
   normalizedText: string;
   confidence: number;
   needsUserReview: boolean;
-  provider: "baidu-ocr" | "backend-ocr" | "vision-native" | "deterministic-fallback";
+  provider: "google-vision" | "baidu-ocr" | "backend-ocr" | "vision-native" | "deterministic-fallback";
 };
 
 const fallbackMathSamples = [

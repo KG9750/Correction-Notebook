@@ -34,6 +34,6 @@ export async function recognizeWithBackendOcr(imageUri: string): Promise<OcrResu
     normalizedText: payload.normalized_text,
     confidence: payload.confidence,
     needsUserReview: payload.needs_user_review,
-    provider: payload.provider === "baidu-ocr" ? "baidu-ocr" : "backend-ocr"
+    provider: payload.provider === "google-vision" ? "google-vision" : payload.provider === "baidu-ocr" ? "baidu-ocr" : "backend-ocr"
   };
 }

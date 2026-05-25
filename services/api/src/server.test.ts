@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createApp } from "./server.js";
-import { BaiduOcrClient } from "./ocr/baidu.js";
+import { GoogleVisionOcrClient } from "./ocr/google.js";
 
 async function createMistakeAndPractice() {
   const app = await createApp();
@@ -20,7 +20,7 @@ async function createMistakeAndPractice() {
 }
 
 describe("Correction Notebook API", () => {
-  it("returns a typed OCR result from the configured Baidu OCR client", async () => {
+  it("returns a typed OCR result from the configured Google Vision OCR client", async () => {
     const app = await createApp({
       ocrClient: {
         recognize: async () => ({
@@ -28,11 +28,11 @@ describe("Correction Notebook API", () => {
           normalized_text: "一根绳子剪去 8 米",
           confidence: 0.91,
           needs_user_review: false,
-          provider: "baidu-ocr",
+          provider: "google-vision",
           words: ["一根绳子剪去 8 米"],
-          log_id: "log_1"
+          math_latex: []
         })
-      } as BaiduOcrClient
+      } as GoogleVisionOcrClient
     });
 
     const response = await app.inject({
@@ -45,12 +45,12 @@ describe("Correction Notebook API", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json().provider).toBe("baidu-ocr");
+    expect(response.json().provider).toBe("google-vision");
     expect(response.json().normalized_text).toContain("绳子");
   });
 
-  it("returns a clear OCR configuration error when Baidu credentials are absent", async () => {
-    const app = await createApp({ ocrClient: new BaiduOcrClient({ apiKey: "", secretKey: "" }) });
+  it("returns a clear OCR configuration error when Google Vision credentials are absent", async () => {
+    const app = await createApp({ ocrClient: new GoogleVisionOcrClient({ apiKey: "" }) });
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/ocr",
@@ -60,7 +60,7 @@ describe("Correction Notebook API", () => {
     });
 
     expect(response.statusCode).toBe(503);
-    expect(response.json().error).toBe("baidu_ocr_not_configured");
+    expect(response.json().error).toBe("google_vision_not_configured");
   });
 
   it("creates a mistake even when OCR text is too short and marks it for user review", async () => {

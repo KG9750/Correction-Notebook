@@ -26,20 +26,20 @@ import {
 import Fastify from "fastify";
 import type { ZodError, ZodType } from "zod";
 import { createVirtualPdfUrl } from "./pdf-links.js";
-import { BaiduOcrClient, BaiduOcrConfigurationError } from "./ocr/baidu.js";
+import { GoogleVisionOcrClient, GoogleVisionConfigurationError } from "./ocr/google.js";
 import { createMemoryStore, type AppStore } from "./store.js";
 
 type CreateAppOptions = {
   store?: AppStore;
   aiProvider?: LLMProvider;
-  ocrClient?: BaiduOcrClient;
+  ocrClient?: GoogleVisionOcrClient;
 };
 
 export async function createApp(options: CreateAppOptions = {}) {
   const app = Fastify({ logger: process.env.NODE_ENV !== "test", bodyLimit: 8 * 1024 * 1024 });
   const store = options.store ?? createMemoryStore();
   const ai = options.aiProvider ?? new MockLLMProvider();
-  const ocrClient = options.ocrClient ?? new BaiduOcrClient();
+  const ocrClient = options.ocrClient ?? new GoogleVisionOcrClient();
 
   await app.register(cors, { origin: true });
 
@@ -53,16 +53,16 @@ export async function createApp(options: CreateAppOptions = {}) {
       const result = OcrResultSchema.parse(await ocrClient.recognize(body.image_base64, body.language_type));
       return result;
     } catch (error) {
-      if (error instanceof BaiduOcrConfigurationError) {
+      if (error instanceof GoogleVisionConfigurationError) {
         return reply.code(503).send({
-          error: "baidu_ocr_not_configured",
-          message: "Set BAIDU_OCR_API_KEY and BAIDU_OCR_SECRET_KEY on the API service."
+          error: "google_vision_not_configured",
+          message: "Set GOOGLE_CLOUD_VISION_API_KEY on the API service."
         });
       }
       request.log.error(error);
       return reply.code(502).send({
-        error: "baidu_ocr_failed",
-        message: error instanceof Error ? error.message : "Baidu OCR request failed"
+        error: "google_vision_failed",
+        message: error instanceof Error ? error.message : "Google Vision request failed"
       });
     }
   });
