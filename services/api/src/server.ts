@@ -1,5 +1,5 @@
 import cors from "@fastify/cors";
-import { MockLLMProvider, type LLMProvider } from "@correction-notebook/ai";
+import { DeepSeekProvider, MockLLMProvider, type LLMProvider } from "@correction-notebook/ai";
 import {
   AIAnalysisSchema,
   CreateMistakeRequestSchema,
@@ -38,7 +38,7 @@ type CreateAppOptions = {
 export async function createApp(options: CreateAppOptions = {}) {
   const app = Fastify({ logger: process.env.NODE_ENV !== "test", bodyLimit: 8 * 1024 * 1024 });
   const store = options.store ?? createMemoryStore();
-  const ai = options.aiProvider ?? new MockLLMProvider();
+  const ai = options.aiProvider ?? (process.env.DEEPSEEK_API_KEY ? new DeepSeekProvider() : new MockLLMProvider());
   const ocrClient = options.ocrClient ?? new GoogleVisionOcrClient();
 
   await app.register(cors, { origin: true });

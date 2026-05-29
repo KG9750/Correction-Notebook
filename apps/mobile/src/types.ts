@@ -10,6 +10,7 @@ export type NotebookState = {
   profile: StudentProfile;
   activeSection: AppSection;
   selectedMistakeId: string;
+  enrichingMistakeId: string | null;
   mistakes: Mistake[];
   analyses: AIAnalysis[];
   generatedQuestions: GeneratedQuestion[];

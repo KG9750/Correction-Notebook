@@ -1,4 +1,5 @@
 import type { OcrResult } from "@correction-notebook/shared";
+import { ProxyAgent } from "undici";
 
 type FetchLike = typeof fetch;
 
@@ -55,7 +56,17 @@ export class GoogleVisionOcrClient {
       options.endpoint ??
       process.env.GOOGLE_VISION_ENDPOINT ??
       "https://vision.googleapis.com/v1/images:annotate";
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    if (options.fetchImpl) {
+      this.fetchImpl = options.fetchImpl;
+    } else {
+      const proxyUrl = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
+      if (proxyUrl) {
+        const proxyAgent = new ProxyAgent(proxyUrl);
+        this.fetchImpl = (url, init) => fetch(url, { ...init, dispatcher: proxyAgent } as RequestInit);
+      } else {
+        this.fetchImpl = fetch;
+      }
+    }
   }
 
   isConfigured(): boolean {

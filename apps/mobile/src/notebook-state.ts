@@ -12,11 +12,33 @@ import {
 import { sampleAnalyses, sampleGeneratedQuestions, sampleMistakes, sampleProfile } from "./sample-data";
 import type { AppSection, NotebookState } from "./types";
 
+export function replaceMistakeAI(
+  state: NotebookState,
+  mistakeId: string,
+  analysis: AIAnalysis,
+  questions: GeneratedQuestion[]
+): NotebookState {
+  return {
+    ...state,
+    analyses: [analysis, ...state.analyses.filter((a) => a.mistake_id !== mistakeId && a.id !== analysis.id)],
+    generatedQuestions: [
+      ...questions.filter((q) => !state.generatedQuestions.some((existing) => existing.id === q.id)),
+      ...state.generatedQuestions.filter((q) => q.mistake_id !== mistakeId)
+    ],
+    mistakes: state.mistakes.map((m) =>
+      m.id === mistakeId
+        ? { ...m, main_error_type: analysis.main_error_type, secondary_error_types: analysis.secondary_error_types, updated_at: nowIso() }
+        : m
+    )
+  };
+}
+
 export function createInitialNotebookState(): NotebookState {
   return {
     profile: sampleProfile,
     activeSection: "home",
     selectedMistakeId: sampleMistakes[0]?.id ?? "",
+    enrichingMistakeId: null,
     mistakes: sampleMistakes,
     analyses: sampleAnalyses,
     generatedQuestions: sampleGeneratedQuestions,

@@ -11,7 +11,10 @@
       "bundleIdentifier": "com.leo.correctionnotebook",
       "infoPlist": {
         "NSCameraUsageDescription": "用于拍摄学生试卷错题并保存到错题本。",
-        "NSPhotoLibraryUsageDescription": "用于从相册导入试卷错题图片。"
+        "NSPhotoLibraryUsageDescription": "用于从相册导入试卷错题图片。",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
       }
     },
     "web": {

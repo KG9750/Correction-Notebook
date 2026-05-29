@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import type { GeneratedQuestion, Mistake } from "@correction-notebook/shared";
+import type { AIAnalysis, GeneratedQuestion, Mistake } from "@correction-notebook/shared";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import type { ReactNode } from "react";
@@ -25,10 +25,12 @@ import {
   createTestPaper,
   deleteMistake,
   recordPracticeAttempt,
+  replaceMistakeAI,
   setSection,
   updateMistake
 } from "./notebook-state";
 import { recognizeMistakeImage, type OcrResult } from "./ocr/recognize";
+import { enrichMistakeWithServerAI } from "./api/enrich";
 import type { AppSection, NotebookState } from "./types";
 
 const navItems: Array<{ key: AppSection; label: string; icon: keyof typeof Ionicons.glyphMap }> = [
@@ -57,11 +59,73 @@ export function CorrectionNotebookApp() {
           {state.activeSection === "home" ? (
             <HomeScreen state={state} onNavigate={goTo} onSelectMistake={selectMistake} onCreatePaper={() => setState(createTestPaper)} />
           ) : null}
-          {state.activeSection === "capture" ? <CaptureScreen onCaptured={(input) => setState((current) => addCapturedMistake(current, input))} /> : null}
+          {state.activeSection === "capture" ? (
+            <CaptureScreen
+              onCaptured={(input) => {
+                setState((current) => {
+                  const next = addCapturedMistake(current, input);
+                  const mistakeId = next.selectedMistakeId;
+                  if (mistakeId) {
+                    setState((prev) => ({ ...prev, enrichingMistakeId: mistakeId }));
+                    enrichMistakeWithServerAI({
+                      studentId: next.profile.id,
+                      grade: next.profile.grade,
+                      ocrText: input.ocrText,
+                      studentAnswer: input.studentAnswer,
+                      imageUri: input.imageUri
+                    }).then((result) => {
+                      setState((prev) => ({ ...prev, enrichingMistakeId: null }));
+                      if (result) {
+                        setState((prev) =>
+                          replaceMistakeAI(prev, mistakeId,
+                            {
+                              id: result.analysis.analysis_id,
+                              mistake_id: mistakeId,
+                              main_error_type: result.analysis.main_error_type,
+                              secondary_error_types: result.analysis.secondary_error_types,
+                              error_summary: result.analysis.error_summary,
+                              wrong_step_location: result.analysis.wrong_step_location,
+                              correct_solution_steps: result.analysis.correct_solution_steps,
+                              avoidance_tip: result.analysis.avoidance_tip,
+                              student_friendly_explanation: result.analysis.student_friendly_explanation,
+                              confidence: result.analysis.confidence,
+                              needs_human_review: result.analysis.needs_human_review,
+                              model_provider: result.analysis.model_provider,
+                              model_name: result.analysis.model_name,
+                              created_at: result.analysis.created_at
+                            } as AIAnalysis,
+                            result.questions.map((q) => ({
+                              id: q.id,
+                              mistake_id: mistakeId,
+                              question_text: q.question_text,
+                              difficulty: q.difficulty,
+                              question_type: q.question_type,
+                              estimated_time_seconds: q.estimated_time_seconds,
+                              answer: q.answer,
+                              solution_steps: q.solution_steps,
+                              knowledge_points: q.knowledge_points,
+                              target_error_type: q.target_error_type,
+                              why_related_to_original_mistake: q.why_related_to_original_mistake,
+                              verification_status: q.verification_status,
+                              created_at: q.created_at
+                            } as GeneratedQuestion))
+                        ));
+                      }
+                    }).catch((err: unknown) => {
+                      setState((prev) => ({ ...prev, enrichingMistakeId: null }));
+                      console.error("[enrich] Server AI enrichment failed:", err);
+                    });
+                  }
+                  return next;
+                });
+              }}
+            />
+          ) : null}
           {state.activeSection === "notebook" && selectedMistake ? (
             <NotebookScreen
               state={state}
               selectedMistake={selectedMistake}
+              enrichingMistakeId={state.enrichingMistakeId}
               onSelectMistake={selectMistake}
               onAttempt={(question, answer, correct) => setState((current) => recordPracticeAttempt(current, question.id, answer, correct))}
               onUpdateMistake={(mistakeId, patch) => setState((current) => updateMistake(current, mistakeId, patch))}
@@ -202,6 +266,11 @@ function CaptureScreen({ onCaptured }: { onCaptured: (input: { imageUri?: string
   };
 
   const captureWithCamera = async () => {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
+      alert("需要相机权限才能拍照，请在系统设置中开启。");
+      return;
+    }
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       quality: 0.92
@@ -320,6 +389,7 @@ function CaptureScreen({ onCaptured }: { onCaptured: (input: { imageUri?: string
 function NotebookScreen({
   state,
   selectedMistake,
+  enrichingMistakeId,
   onSelectMistake,
   onAttempt,
   onUpdateMistake,
@@ -327,6 +397,7 @@ function NotebookScreen({
 }: {
   state: NotebookState;
   selectedMistake: Mistake;
+  enrichingMistakeId: string | null;
   onSelectMistake: (id: string) => void;
   onAttempt: (question: GeneratedQuestion, answer: string, correct: boolean) => void;
   onUpdateMistake: (
@@ -376,6 +447,12 @@ function NotebookScreen({
         ))}
       </ScrollView>
       <ScrollView contentContainerStyle={styles.detailContent} style={styles.detailPane}>
+        {enrichingMistakeId === selectedMistake.id ? (
+          <View style={styles.enrichingBanner}>
+            <Ionicons name="sync-outline" size={18} color="#0b4a6f" />
+            <Text style={styles.enrichingText}>Analyzing…</Text>
+          </View>
+        ) : null}
         <View style={styles.detailHero}>
           <View style={styles.problemImage}>
             {selectedMistake.cropped_image_uri ? <Image source={{ uri: selectedMistake.cropped_image_uri }} style={styles.previewImage} resizeMode="contain" /> : <Text style={styles.problemImageText}>原题图片 / 裁切图</Text>}
@@ -956,6 +1033,21 @@ const styles = StyleSheet.create({
   },
   detailPane: {
     flex: 1
+  },
+  enrichingBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: "#eef9fc",
+    borderWidth: 1,
+    borderColor: "#bdd7e1"
+  },
+  enrichingText: {
+    color: "#0b4a6f",
+    fontWeight: "700",
+    fontSize: 14
   },
   detailContent: {
     padding: 22,
