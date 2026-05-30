@@ -1,14 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { sampleGeneratedQuestions } from "../sample-data";
-import { createInitialNotebookState, createTestPaper } from "../notebook-state";
 import { buildAnswerPaperHtml, buildStudentPaperHtml } from "./paperHtml";
+import type { TestPaper } from "@correction-notebook/shared";
 
 describe("paper HTML", () => {
   it("keeps student and answer papers separate", () => {
-    const state = createTestPaper(createInitialNotebookState());
-    const paper = state.papers[0];
-    expect(paper).toBeDefined();
-    if (!paper) throw new Error("expected paper");
+    const paper: TestPaper = {
+      id: "paper_test",
+      student_id: "student_001",
+      title: "数学错因复测卷",
+      filters: {
+        time_range_days: 30,
+        knowledge_points: ["一元一次方程"],
+        error_types: ["方法性错误"],
+        mastery_statuses: ["not_mastered", "partially_mastered"]
+      },
+      question_count: sampleGeneratedQuestions.length,
+      student_pdf_url: "file:///tmp/student.pdf",
+      answer_pdf_url: "file:///tmp/answer.pdf",
+      questions: [],
+      created_at: "2026-05-30T00:00:00.000Z"
+    };
     const studentHtml = buildStudentPaperHtml(paper, sampleGeneratedQuestions);
     const answerHtml = buildAnswerPaperHtml(paper, sampleGeneratedQuestions);
 

@@ -1,4 +1,4 @@
-import type { GeneratedQuestion, MasteryStatus, Mistake } from "./schemas.js";
+import type { GeneratedQuestion, MasteryStatus, Mistake, PracticeAttempt } from "./schemas.js";
 import { defaultKnowledgePoints, primaryErrorTypes } from "./taxonomy.js";
 
 export function nowIso(): string {
@@ -61,6 +61,20 @@ export function computeMasteryFromPractice(total: 3 | 5, correct: number): Maste
   return "not_mastered";
 }
 
+export function gradedPracticeAttempts(attempts: PracticeAttempt[]): PracticeAttempt[] {
+  return attempts.filter((attempt) => attempt.grading_status === "graded" && attempt.is_correct !== null);
+}
+
+export function computeMasteryFromGradedAttempts(total: 3 | 5, attempts: PracticeAttempt[]): MasteryStatus {
+  const recent = gradedPracticeAttempts(attempts).slice(-total);
+  if (recent.length < total) return "practicing";
+  return computeMasteryFromPractice(total, recent.filter((attempt) => attempt.is_correct).length);
+}
+
+export function hasMasteryConfirmationEvidence(total: 3 | 5, attempts: PracticeAttempt[]): boolean {
+  return computeMasteryFromGradedAttempts(total, attempts) === "mastered";
+}
+
 export function nextReviewDueForMastery(status: MasteryStatus, from = new Date()): string | undefined {
   if (status === "mastered") return addDays(from, 7);
   if (status === "partially_mastered") return addDays(from, 3);
@@ -90,6 +104,16 @@ export function reviewPriorityScore(mistake: Mistake, asOf = new Date()): number
   const repeatedErrorHint = mistake.secondary_error_types.length > 0 ? 6 : 0;
 
   return statusWeights[mistake.mastery_status] + dueBonus + repeatedErrorHint + Math.min(createdAgeDays, 14);
+}
+
+export function dueReviewMistakes(mistakes: Mistake[], asOf = new Date()): Mistake[] {
+  return mistakes
+    .filter((mistake) => mistake.mastery_status !== "mastered")
+    .filter((mistake) => {
+      if (!mistake.review_due_at) return ["pending_analysis", "pending_practice", "practicing", "relapsed"].includes(mistake.mastery_status);
+      return new Date(mistake.review_due_at) <= asOf;
+    })
+    .sort((left, right) => reviewPriorityScore(right, asOf) - reviewPriorityScore(left, asOf));
 }
 
 export function defaultKnowledgePointList(points?: string[]): string[] {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { addCapturedMistake, confirmMistakeMastered, createInitialNotebookState, deleteMistake, recordPracticeAttempt, replaceMistakeAI, updateMistake, withDefaultSettings } from "./notebook-state";
+import { addCapturedMistake, canConfirmMistakeMastered, confirmMistakeMastered, createInitialNotebookState, deleteMistake, getDueReviewMistakes, recordPracticeAttempt, replaceMistakeAI, updateMistake, withDefaultSettings } from "./notebook-state";
 import { sampleAnalyses, sampleGeneratedQuestions, sampleMistakes } from "./sample-data";
+import { createNotebookBackupManifest, restoreNotebookStateFromBackup, serializeNotebookBackupManifest } from "./storage/backup-package";
 import { parseArchivedNotebookState, serializeNotebookStateForArchive } from "./storage/codec";
 import type { NotebookState } from "./types";
 
@@ -12,6 +13,41 @@ describe("mobile notebook state", () => {
       mistakes: sampleMistakes,
       analyses: sampleAnalyses,
       generatedQuestions: sampleGeneratedQuestions
+    };
+  }
+
+  function gradedAttempt(questionId: string, isCorrect: boolean) {
+    const question = sampleGeneratedQuestions.find((item) => item.id === questionId)!;
+    return {
+      id: `attempt_${questionId}_${isCorrect ? "correct" : "wrong"}`,
+      student_id: createInitialNotebookState().profile.id,
+      mistake_id: question.mistake_id,
+      generated_question_id: question.id,
+      answer_text: isCorrect ? question.answer : "wrong",
+      grading_status: "graded" as const,
+      is_correct: isCorrect,
+      error_type_if_wrong: isCorrect ? null : question.target_error_type,
+      graded_by: "ai" as const,
+      feedback: isCorrect ? "正确。" : "错误。",
+      created_at: "2026-05-30T00:00:00.000Z"
+    };
+  }
+
+  function ungradedAttempt(questionId: string) {
+    const question = sampleGeneratedQuestions.find((item) => item.id === questionId)!;
+    return {
+      id: `attempt_${questionId}_ungraded`,
+      student_id: createInitialNotebookState().profile.id,
+      mistake_id: question.mistake_id,
+      generated_question_id: question.id,
+      answer_text: "x = 20",
+      grading_status: "ungraded" as const,
+      is_correct: null,
+      error_type_if_wrong: null,
+      graded_by: null,
+      feedback: "暂未批改。",
+      grading_error: "deepseek_grading_failed",
+      created_at: "2026-05-30T00:00:00.000Z"
     };
   }
 
@@ -86,9 +122,9 @@ describe("mobile notebook state", () => {
 
   it("updates mastery after three local practice attempts", () => {
     let state = stateWithSamples();
-    state = recordPracticeAttempt(state, "gq_001", "x = 20", true);
-    state = recordPracticeAttempt(state, "gq_002", "wrong", false);
-    state = recordPracticeAttempt(state, "gq_003", "x = 12", true);
+    state = recordPracticeAttempt(state, gradedAttempt("gq_001", true), 3);
+    state = recordPracticeAttempt(state, gradedAttempt("gq_002", false), 3);
+    state = recordPracticeAttempt(state, gradedAttempt("gq_003", true), 3);
 
     const mistake = state.mistakes.find((item) => item.id === "mistake_001");
     expect(mistake?.mastery_status).toBe("partially_mastered");
@@ -97,11 +133,14 @@ describe("mobile notebook state", () => {
 
   it("waits for explicit confirmation before marking all-correct practice as mastered", () => {
     let state = stateWithSamples();
-    state = recordPracticeAttempt(state, "gq_001", "x = 20", true);
-    state = recordPracticeAttempt(state, "gq_002", "x = 90", true);
-    state = recordPracticeAttempt(state, "gq_003", "x = 12", true);
+    state = recordPracticeAttempt(state, gradedAttempt("gq_001", true), 3);
+    state = recordPracticeAttempt(state, gradedAttempt("gq_002", true), 3);
+    state = recordPracticeAttempt(state, gradedAttempt("gq_003", true), 3);
+    state = recordPracticeAttempt(state, gradedAttempt("gq_002", true), 3);
+    state = recordPracticeAttempt(state, gradedAttempt("gq_003", true), 3);
 
     expect(state.mistakes.find((item) => item.id === "mistake_001")?.mastery_status).toBe("practicing");
+    expect(canConfirmMistakeMastered(state, "mistake_001")).toBe(true);
 
     const confirmed = confirmMistakeMastered(state, "mistake_001");
     expect(confirmed.mistakes.find((item) => item.id === "mistake_001")?.mastery_status).toBe("mastered");
@@ -136,15 +175,72 @@ describe("mobile notebook state", () => {
     expect(next.selectedMistakeId).toBe("mistake_002");
   });
 
-  it("moves a confirmed mastered mistake into the archived collection", () => {
+  it("does not move a mistake into the archived collection without graded mastery evidence", () => {
     const state = stateWithSamples();
     const next = confirmMistakeMastered(state, "mistake_001");
 
     const mistake = next.mistakes.find((item) => item.id === "mistake_001");
-    expect(next.activeSection).toBe("collection");
-    expect(next.archivedMistakeIds).toContain("mistake_001");
-    expect(mistake?.mastery_status).toBe("mastered");
-    expect(mistake?.review_due_at).toBeTruthy();
+    expect(next.activeSection).toBe(state.activeSection);
+    expect(next.archivedMistakeIds).not.toContain("mistake_001");
+    expect(mistake?.mastery_status).toBe("not_mastered");
+  });
+
+  it("keeps ungraded DeepSeek attempts out of mastery updates", () => {
+    const state = stateWithSamples();
+    const next = recordPracticeAttempt(state, ungradedAttempt("gq_001"), 3);
+
+    const mistake = next.mistakes.find((item) => item.id === "mistake_001");
+    expect(next.attempts[0]?.grading_status).toBe("ungraded");
+    expect(mistake?.mastery_status).toBe("not_mastered");
+    expect(mistake?.review_due_at).toBe("2026-05-23T00:00:00.000Z");
+  });
+
+  it("shows only due active mistakes in review order", () => {
+    const state = stateWithSamples();
+    const due = getDueReviewMistakes(state, new Date("2026-05-24T00:00:00.000Z"));
+
+    expect(due.map((mistake) => mistake.id)).toEqual(["mistake_001"]);
+  });
+
+  it("creates a restorable backup manifest with image and test paper assets", () => {
+    const state: NotebookState = {
+      ...stateWithSamples(),
+      mistakes: [{
+        ...sampleMistakes[0]!,
+        original_image_uri: "file:///tmp/original.jpg",
+        cropped_image_uri: "file:///tmp/cropped.jpg"
+      }],
+      papers: [{
+        id: "paper_001",
+        student_id: createInitialNotebookState().profile.id,
+        title: "数学复测卷",
+        filters: {
+          time_range_days: 30,
+          knowledge_points: ["一元一次方程"],
+          error_types: ["方法性错误"],
+          mastery_statuses: ["not_mastered"]
+        },
+        question_count: 1,
+        student_pdf_url: "file:///tmp/student.pdf",
+        answer_pdf_url: "file:///tmp/answer.pdf",
+        questions: [],
+        generation_manifest_url: "file:///tmp/paper-manifest.json",
+        created_at: "2026-05-30T00:00:00.000Z"
+      }]
+    };
+
+    const manifest = createNotebookBackupManifest(state, "2026-05-30T00:00:00.000Z");
+    const restored = restoreNotebookStateFromBackup(serializeNotebookBackupManifest(manifest))!;
+
+    expect(manifest.assets.map((asset) => asset.type)).toEqual([
+      "original_image",
+      "cropped_image",
+      "student_pdf",
+      "answer_pdf",
+      "test_paper_manifest"
+    ]);
+    expect(restored.mistakes[0]?.original_image_uri).toMatch(/^backup:\/\//);
+    expect(restored.papers[0]?.student_pdf_url).toMatch(/^backup:\/\//);
   });
 
   it("serializes changed notebook state so a reload can restore edits, attempts, archives, and settings", () => {
@@ -162,7 +258,9 @@ describe("mobile notebook state", () => {
       main_error_type: "过程性错误",
       secondary_error_types: ["计算错误"]
     });
-    state = recordPracticeAttempt(state, "gq_001", "x = 20", true);
+    state = recordPracticeAttempt(state, gradedAttempt("gq_001", true), 3);
+    state = recordPracticeAttempt(state, gradedAttempt("gq_002", true), 3);
+    state = recordPracticeAttempt(state, gradedAttempt("gq_003", true), 3);
     state = confirmMistakeMastered(state, "mistake_001");
     state = {
       ...state,

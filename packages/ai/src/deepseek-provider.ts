@@ -3,10 +3,11 @@ import {
   nowIso,
   type AIAnalysis,
   type GeneratedQuestion,
-  type PracticeAttempt
+  type PracticeAttempt,
+  type TestPaperQuestion
 } from "@correction-notebook/shared";
 import { ProxyAgent } from "undici";
-import type { AnalyzeMistakeInput, GeneratePracticeInput, GradeAnswerInput, LLMProvider, VerifyMathInput, VerifyMathOutput } from "./provider.js";
+import type { AnalyzeMistakeInput, GeneratePracticeInput, GenerateTestPaperInput, GradeAnswerInput, LLMProvider, VerifyMathInput, VerifyMathOutput } from "./provider.js";
 
 type FetchLike = typeof fetch;
 
@@ -185,6 +186,59 @@ export class DeepSeekProvider implements LLMProvider {
     };
   }
 
+  async generateTestPaper(input: GenerateTestPaperInput): Promise<TestPaperQuestion[]> {
+    const knowledge = input.knowledge_distribution.map((item) => `${item.knowledge_point}:${item.count}`).join("，") || "暂无";
+    const errors = input.error_distribution.map((item) => `${item.error_type}:${item.count}`).join("，") || "暂无";
+    const sourceSummary = input.source_mistakes.slice(0, 8).map((mistake, index) => {
+      const question = mistake.normalized_question_text || mistake.ocr_text;
+      return `${index + 1}. ${question.slice(0, 80)}；错因：${mistake.main_error_type ?? "待分析"}；知识点：${mistake.knowledge_points.join("、")}`;
+    }).join("\n");
+
+    const prompt = `请根据学生错题分布，重新生成一份数学复测卷内容。不要复用旧变式题原文。
+
+【年级】${input.student_profile.grade}
+【题量】${input.question_count}
+【难度】${input.difficulty_mode}
+【知识点分布】${knowledge}
+【错因分布】${errors}
+【来源错题摘要】
+${sourceSummary}
+
+请输出严格 JSON 对象（不要带 markdown 代码块标记）：
+{
+  "questions": [
+    {
+      "question_text": "新生成题目",
+      "question_latex": "可选 LaTeX",
+      "difficulty": "basic / standard / challenge",
+      "answer": "标准答案",
+      "solution_steps": ["步骤1", "步骤2", "步骤3"],
+      "knowledge_points": ["知识点"],
+      "target_error_type": "要复测的错因",
+      "source_mistake_ids": ["关联错题ID"]
+    }
+  ]
+}
+
+要求：题目必须围绕错题知识点分布重新生成，答案和步骤必须可用于答案卷。`;
+
+    const raw = await this.chat(prompt, input.model);
+    const parsed = this.parseJson<{ questions?: RawTestPaperQuestion[] } | RawTestPaperQuestion[]>(raw);
+    const rawQuestions = Array.isArray(parsed) ? parsed : parsed.questions;
+
+    return (Array.isArray(rawQuestions) ? rawQuestions : []).slice(0, input.question_count).map((question) => ({
+      id: createId("tpq"),
+      question_text: question.question_text || "请解答这道复测题。",
+      ...(question.question_latex ? { question_latex: question.question_latex } : {}),
+      difficulty: toDifficulty(question.difficulty),
+      answer: question.answer || "略",
+      solution_steps: question.solution_steps?.length ? question.solution_steps : ["审题。", "列式。", "求解。"],
+      knowledge_points: question.knowledge_points?.length ? question.knowledge_points : [input.knowledge_distribution[0]?.knowledge_point ?? "综合复习"],
+      target_error_type: question.target_error_type || input.error_distribution[0]?.error_type || "方法性错误",
+      source_mistake_ids: question.source_mistake_ids?.length ? question.source_mistake_ids : input.source_mistakes.slice(0, 3).map((mistake) => mistake.id)
+    }));
+  }
+
   async verifyMath(input: VerifyMathInput): Promise<VerifyMathOutput> {
     const q = input.question;
     const prompt = `请验证下面这道数学题的正确性：
@@ -288,6 +342,17 @@ type RawQuestion = {
   knowledge_points?: string[];
   target_error_type?: string;
   why_related_to_original_mistake?: string;
+};
+
+type RawTestPaperQuestion = {
+  question_text?: string;
+  question_latex?: string;
+  difficulty?: string;
+  answer?: string;
+  solution_steps?: string[];
+  knowledge_points?: string[];
+  target_error_type?: string;
+  source_mistake_ids?: string[];
 };
 
 function toErrorType(value: string | undefined): typeof VALID_ERROR_TYPES[number] {

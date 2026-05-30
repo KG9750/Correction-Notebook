@@ -1,13 +1,50 @@
 import { describe, expect, it } from "vitest";
 import {
   computeMasteryFromPractice,
+  computeMasteryFromGradedAttempts,
+  dueReviewMistakes,
   filterPassedQuestions,
+  hasMasteryConfirmationEvidence,
   initialMistakeStatus,
   nextReviewDueForMastery,
   normalizeErrorTags,
   reviewPriorityScore
 } from "./domain.js";
-import type { GeneratedQuestion, Mistake } from "./schemas.js";
+import type { GeneratedQuestion, Mistake, PracticeAttempt } from "./schemas.js";
+
+function practiceAttempt(questionId: string, isCorrect: boolean): PracticeAttempt {
+  return {
+    id: `attempt_${questionId}`,
+    student_id: "student_1",
+    mistake_id: "m_1",
+    generated_question_id: questionId,
+    answer_text: isCorrect ? "correct" : "wrong",
+    grading_status: "graded",
+    is_correct: isCorrect,
+    error_type_if_wrong: isCorrect ? null : "方法性错误",
+    graded_by: "ai",
+    feedback: isCorrect ? "正确。" : "错误。",
+    created_at: "2026-05-23T00:00:00.000Z"
+  };
+}
+
+function baseMistake(): Omit<Mistake, "mastery_status"> {
+  return {
+    id: "m_1",
+    student_id: "student_1",
+    subject: "math",
+    grade: "初一",
+    source_type: "exam_paper",
+    ocr_text: "应用题",
+    normalized_question_text: "应用题",
+    student_answer: "",
+    knowledge_points: ["一元一次方程"],
+    secondary_error_types: [],
+    needs_user_review: false,
+    created_at: "2026-05-20T00:00:00.000Z",
+    updated_at: "2026-05-20T00:00:00.000Z"
+  };
+}
 
 describe("mastery rules", () => {
   it("maps 3-question practice results to the PRD mastery statuses", () => {
@@ -28,6 +65,19 @@ describe("mastery rules", () => {
     const base = new Date("2026-05-23T00:00:00.000Z");
     expect(nextReviewDueForMastery("partially_mastered", base)).toBe("2026-05-26T00:00:00.000Z");
     expect(nextReviewDueForMastery("not_mastered", base)).toBe("2026-05-24T00:00:00.000Z");
+  });
+
+  it("computes mastery only from graded attempts", () => {
+    const attempts = [
+      practiceAttempt("q1", true),
+      { ...practiceAttempt("q2", true), grading_status: "ungraded" as const, is_correct: null, graded_by: null },
+      practiceAttempt("q3", true),
+      practiceAttempt("q4", true)
+    ];
+
+    expect(computeMasteryFromGradedAttempts(3, attempts)).toBe("mastered");
+    expect(hasMasteryConfirmationEvidence(3, attempts)).toBe(true);
+    expect(computeMasteryFromGradedAttempts(5, attempts)).toBe("practicing");
   });
 
   it("starts captured mistakes in analysis regardless of OCR confidence", () => {
@@ -93,6 +143,31 @@ describe("review priority", () => {
     expect(reviewPriorityScore(notMastered, new Date("2026-05-23T00:00:00.000Z"))).toBeGreaterThan(
       reviewPriorityScore(mastered, new Date("2026-05-23T00:00:00.000Z"))
     );
+  });
+
+  it("returns only active due review mistakes ordered by priority", () => {
+    const asOf = new Date("2026-05-23T00:00:00.000Z");
+    const base = baseMistake();
+    const dueNotMastered: Mistake = {
+      ...base,
+      id: "due",
+      mastery_status: "not_mastered",
+      review_due_at: "2026-05-22T00:00:00.000Z"
+    };
+    const future: Mistake = {
+      ...base,
+      id: "future",
+      mastery_status: "partially_mastered",
+      review_due_at: "2026-05-30T00:00:00.000Z"
+    };
+    const mastered: Mistake = {
+      ...base,
+      id: "mastered",
+      mastery_status: "mastered",
+      review_due_at: "2026-05-22T00:00:00.000Z"
+    };
+
+    expect(dueReviewMistakes([future, mastered, dueNotMastered], asOf).map((mistake) => mistake.id)).toEqual(["due"]);
   });
 });
 

@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import type { AIAnalysis, GeneratedQuestion, Mistake } from "@correction-notebook/shared";
+import { createId, nowIso, type AIAnalysis, type GeneratedQuestion, type Mistake, type PracticeAttempt } from "@correction-notebook/shared";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Pressable,
@@ -15,16 +15,18 @@ import {
   addCapturedMistake,
   confirmMistakeMastered,
   createInitialNotebookState,
-  createTestPaper,
   deleteMistake,
+  getDueReviewMistakes,
   recordPracticeAttempt,
+  recordTestPaper,
   replaceMistakeAI,
   setSection,
   updateMistake,
   withDefaultSettings
 } from "./notebook-state";
-import { enrichMistakeWithServerAI, type EnrichMistakeResult } from "./api/enrich";
+import { createFreshTestPaper, enrichMistakeWithServerAI, submitPracticeAttempt, type EnrichMistakeResult } from "./api/enrich";
 import { loadArchivedNotebookState, saveArchivedNotebookState } from "./storage/archive";
+import { exportNotebookBackupToICloudDrive, importNotebookBackupFromICloudDrive } from "./storage/icloud-backup";
 import type { AppSection, NotebookState } from "./types";
 import { Metric, MistakeRow, Panel, PrimaryAction, SecondaryButton, Sidebar } from "./ui/components";
 import { palette, styles } from "./ui/styles";
@@ -51,6 +53,9 @@ export function CorrectionNotebookApp() {
   const [archiveLoaded, setArchiveLoaded] = useState(false);
   const [practiceGenerationStatus, setPracticeGenerationStatus] = useState<Record<string, "generating" | "failed">>({});
   const [practiceGenerationError, setPracticeGenerationError] = useState<Record<string, string>>({});
+  const [paperGenerationStatus, setPaperGenerationStatus] = useState<"idle" | "generating" | "failed">("idle");
+  const [paperGenerationError, setPaperGenerationError] = useState("");
+  const [backupStatus, setBackupStatus] = useState("");
   const enrichmentInFlightRef = useRef<Set<string>>(new Set());
   const { width } = useWindowDimensions();
   const activeMistakes = state.mistakes.filter((mistake) => !state.archivedMistakeIds.includes(mistake.id));
@@ -63,6 +68,72 @@ export function CorrectionNotebookApp() {
     setState((current) => ({ ...current, selectedMistakeId: mistakeId, activeSection: "notebook" }));
   const confirmMastered = (mistakeId: string) => {
     setState((current) => confirmMistakeMastered(current, mistakeId));
+  };
+  const gradePractice = async (question: GeneratedQuestion, answerText: string): Promise<PracticeAttempt> => {
+    try {
+      const result = await submitPracticeAttempt({
+        studentId: state.profile.id,
+        questionId: question.id,
+        answerText,
+        practiceTotal: state.settings.practiceCount,
+        model: state.settings.deepseekModel
+      });
+      setState((current) => recordPracticeAttempt(current, result.attempt, current.settings.practiceCount));
+      return result.attempt;
+    } catch (error) {
+      const attempt: PracticeAttempt = {
+        id: createId("local_attempt"),
+        student_id: state.profile.id,
+        mistake_id: question.mistake_id,
+        generated_question_id: question.id,
+        answer_text: answerText,
+        grading_status: "ungraded",
+        is_correct: null,
+        error_type_if_wrong: null,
+        graded_by: null,
+        feedback: "DeepSeek V4 暂未完成批改。你可以先看标准答案和解法，稍后重试。",
+        grading_error: error instanceof Error ? error.message : "practice_grading_failed",
+        created_at: nowIso()
+      };
+      setState((current) => recordPracticeAttempt(current, attempt, current.settings.practiceCount));
+      return attempt;
+    }
+  };
+  const createPaper = () => {
+    if (paperGenerationStatus === "generating") return;
+    setPaperGenerationStatus("generating");
+    setPaperGenerationError("");
+    createFreshTestPaper({
+      studentId: state.profile.id,
+      questionCount: 10,
+      difficultyMode: state.settings.practiceDifficulty,
+      includeAnswerPdf: true
+    }).then((result) => {
+      setState((current) => recordTestPaper(current, result.paper));
+      setPaperGenerationStatus("idle");
+    }).catch((error: unknown) => {
+      setPaperGenerationStatus("failed");
+      setPaperGenerationError(error instanceof Error ? error.message : "复测卷生成失败。");
+    });
+  };
+  const exportBackup = () => {
+    setBackupStatus("正在导出备份…");
+    exportNotebookBackupToICloudDrive(state)
+      .then((uri) => setBackupStatus(`备份已写入：${uri}`))
+      .catch((error: unknown) => setBackupStatus(error instanceof Error ? error.message : "备份导出失败。"));
+  };
+  const importBackup = () => {
+    setBackupStatus("正在读取备份…");
+    importNotebookBackupFromICloudDrive()
+      .then((restored) => {
+        if (!restored) {
+          setBackupStatus("未读取到有效备份。");
+          return;
+        }
+        setState(withDefaultSettings(restored));
+        setBackupStatus("备份已恢复。");
+      })
+      .catch((error: unknown) => setBackupStatus(error instanceof Error ? error.message : "备份恢复失败。"));
   };
   const refreshPractice = (mistake: Mistake) => {
     setPracticeGenerationStatus((status) => ({ ...status, [mistake.id]: "generating" }));
@@ -182,7 +253,7 @@ export function CorrectionNotebookApp() {
         <Sidebar activeSection={state.activeSection} compact={isCompact} onNavigate={goTo} />
         <View style={styles.content}>
           {state.activeSection === "home" ? (
-            <HomeScreen state={state} onNavigate={goTo} onSelectMistake={selectMistake} onCreatePaper={() => setState(createTestPaper)} />
+            <HomeScreen state={state} onNavigate={goTo} onSelectMistake={selectMistake} onCreatePaper={createPaper} />
           ) : null}
           {state.activeSection === "capture" ? (
             <CaptureScreen
@@ -202,7 +273,7 @@ export function CorrectionNotebookApp() {
                 selectedMistake={selectedMistake}
                 enrichingMistakeId={state.enrichingMistakeId}
                 onSelectMistake={selectMistake}
-                onAttempt={(question, answer, correct) => setState((current) => recordPracticeAttempt(current, question.id, answer, correct))}
+                onAttempt={gradePractice}
                 onUpdateMistake={(mistakeId, patch) => setState((current) => updateMistake(current, mistakeId, patch))}
                 onDeleteMistake={(mistakeId) => {
                   setState((current) => deleteMistake(current, mistakeId));
@@ -225,12 +296,15 @@ export function CorrectionNotebookApp() {
           {state.activeSection === "collection" ? (
             <CollectionScreen mistakes={archivedMistakes} />
           ) : null}
-          {state.activeSection === "paper" ? <PaperScreen state={state} onCreatePaper={() => setState(createTestPaper)} /> : null}
-          {state.activeSection === "report" ? <ReportScreen state={state} onCreatePaper={() => setState(createTestPaper)} /> : null}
+          {state.activeSection === "paper" ? <PaperScreen state={state} onCreatePaper={createPaper} generationStatus={paperGenerationStatus} generationError={paperGenerationError} /> : null}
+          {state.activeSection === "report" ? <ReportScreen state={state} onCreatePaper={createPaper} /> : null}
           {state.activeSection === "settings" ? (
             <SettingsScreen
               settings={state.settings}
               onChange={(patch) => setState((current) => ({ ...current, settings: { ...current.settings, ...patch } }))}
+              backupStatus={backupStatus}
+              onExportBackup={exportBackup}
+              onImportBackup={importBackup}
             />
           ) : null}
         </View>
@@ -250,7 +324,8 @@ function HomeScreen({
   onSelectMistake: (id: string) => void;
   onCreatePaper: () => void;
 }) {
-  const dueMistakes = useMemo(() => state.mistakes.filter((mistake) => mistake.mastery_status !== "mastered"), [state.mistakes]);
+  const dueMistakes = useMemo(() => getDueReviewMistakes(state), [state]);
+  const activeMistakeCount = state.mistakes.filter((mistake) => !state.archivedMistakeIds.includes(mistake.id)).length;
   const highFrequency = state.mistakes[0]?.knowledge_points[0] ?? "暂无重点";
 
   return (
@@ -260,7 +335,7 @@ function HomeScreen({
           <Text style={styles.heroKicker}>今日复盘</Text>
           <Text style={styles.heroTitle}>今天要掌握的数学错题</Text>
           <Text style={styles.heroSubtitle}>
-            今天有 {dueMistakes.length} 道需要复习，其中重点是 {highFrequency}。
+            今天有 {dueMistakes.length} 道到期复习，其中重点是 {highFrequency}。
           </Text>
         </View>
       </View>
@@ -276,16 +351,16 @@ function HomeScreen({
               <MistakeRow key={mistake.id} mistake={mistake} onPress={() => onSelectMistake(mistake.id)} />
             ))
           ) : (
-            <Text style={styles.bodyText}>还没有错题记录。</Text>
+            <Text style={styles.bodyText}>今天没有到期复习。可以拍新错题，或从错题本继续练习。</Text>
           )}
         </Panel>
         <Panel title="本周一句话">
           <Text style={styles.summaryText}>
-            本周新增数学错题 {state.mistakes.length} 道，主要错误不是计算，而是等量关系和审题方向。建议先完成 3 道变式题，再打印一份 10 题复测卷。
+            本周新增数学错题 {state.mistakes.length} 道。今日队列按到期时间、掌握状态和错因优先级排序，先完成到期复习再生成 10 题复测卷。
           </Text>
           <View style={styles.metricRow}>
             <Metric label="已掌握" value={`${state.mistakes.filter((m) => m.mastery_status === "mastered").length}`} />
-            <Metric label="未掌握" value={`${dueMistakes.length}`} />
+            <Metric label="待掌握" value={`${activeMistakeCount}`} />
             <Metric label="变式题" value={`${state.generatedQuestions.length}`} />
           </View>
         </Panel>
@@ -294,9 +369,19 @@ function HomeScreen({
   );
 }
 
-function PaperScreen({ state, onCreatePaper }: { state: NotebookState; onCreatePaper: () => void }) {
+function PaperScreen({
+  state,
+  onCreatePaper,
+  generationStatus,
+  generationError
+}: {
+  state: NotebookState;
+  onCreatePaper: () => void;
+  generationStatus: "idle" | "generating" | "failed";
+  generationError: string;
+}) {
   const latestPaper = state.papers[0];
-  const questions = state.generatedQuestions.slice(0, latestPaper?.question_count ?? 3);
+  const questions = latestPaper?.questions.length ? latestPaper.questions : state.generatedQuestions.slice(0, latestPaper?.question_count ?? 3);
   const studentHtml = latestPaper ? buildStudentPaperHtml(latestPaper, questions) : "";
   const answerHtml = latestPaper ? buildAnswerPaperHtml(latestPaper, questions) : "";
 
@@ -331,12 +416,23 @@ function PaperScreen({ state, onCreatePaper }: { state: NotebookState; onCreateP
       </Panel>
       {latestPaper ? (
         <Panel title="PDF 与打印">
-          <Text style={styles.bodyText}>已生成：{latestPaper.title}</Text>
+          <Text style={styles.bodyText}>正式复测卷任务：{latestPaper.latex_job?.status ?? "queued"}。输出目录：{latestPaper.latex_job?.expected_outputs.student_pdf_path ?? latestPaper.student_pdf_url}</Text>
+          <Text style={styles.tipText}>下方 HTML/Expo 打印仅作为非正式预览；正式学生卷和答案卷以 Claude Code + LaTeX 输出 PDF 为准。</Text>
           <View style={styles.formActions}>
             <SecondaryButton icon="print-outline" label="打印学生卷" onPress={() => printHtml(studentHtml)} />
             <SecondaryButton icon="share-outline" label="分享学生 PDF" onPress={() => sharePdf(studentHtml)} />
             <SecondaryButton icon="lock-closed-outline" label="单独打印答案卷" onPress={() => printHtml(answerHtml)} />
           </View>
+        </Panel>
+      ) : null}
+      {generationStatus === "generating" ? (
+        <Panel title="生成中">
+          <Text style={styles.bodyText}>DeepSeek V4 正在重新生成复测题，并准备 Claude Code LaTeX 任务。</Text>
+        </Panel>
+      ) : null}
+      {generationStatus === "failed" ? (
+        <Panel title="生成失败">
+          <Text style={styles.bodyText}>{generationError || "复测卷生成失败，请稍后重试。"}</Text>
         </Panel>
       ) : null}
     </ScrollView>

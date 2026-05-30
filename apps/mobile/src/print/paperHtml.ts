@@ -1,14 +1,16 @@
-import type { GeneratedQuestion, TestPaper } from "@correction-notebook/shared";
+import type { GeneratedQuestion, TestPaper, TestPaperQuestion } from "@correction-notebook/shared";
 
-export function buildStudentPaperHtml(paper: TestPaper, questions: GeneratedQuestion[]): string {
+type PrintableQuestion = Pick<GeneratedQuestion | TestPaperQuestion, "question_text" | "answer" | "solution_steps" | "target_error_type">;
+
+export function buildStudentPaperHtml(paper: TestPaper, questions: PrintableQuestion[]): string {
   return buildPaperHtml(`${paper.title} 学生卷`, questions, false);
 }
 
-export function buildAnswerPaperHtml(paper: TestPaper, questions: GeneratedQuestion[]): string {
+export function buildAnswerPaperHtml(paper: TestPaper, questions: PrintableQuestion[]): string {
   return buildPaperHtml(`${paper.title} 答案与解析`, questions, true);
 }
 
-function buildPaperHtml(title: string, questions: GeneratedQuestion[], includeAnswers: boolean): string {
+function buildPaperHtml(title: string, questions: PrintableQuestion[], includeAnswers: boolean): string {
   const body = questions
     .map((question, index) => {
       const answerBlock = includeAnswers

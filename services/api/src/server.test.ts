@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AnalyzeMistakeInput, GeneratePracticeInput, LLMProvider } from "@correction-notebook/ai";
+import type { AnalyzeMistakeInput, GeneratePracticeInput, GenerateTestPaperInput, LLMProvider } from "@correction-notebook/ai";
 import { createApp } from "./server.js";
 import { GoogleVisionOcrClient } from "./ocr/google.js";
 
@@ -196,6 +196,18 @@ describe("Correction Notebook API", () => {
       async gradeAnswer() {
         return { is_correct: true, feedback: "正确。", error_type_if_wrong: null, graded_by: "manual" as const };
       },
+      async generateTestPaper(input: GenerateTestPaperInput) {
+        return [{
+          id: "tpq_model",
+          question_text: `围绕 ${input.knowledge_distribution[0]?.knowledge_point ?? "方程"} 的新题`,
+          difficulty: "standard" as const,
+          answer: "17",
+          solution_steps: ["列式。", "计算。"],
+          knowledge_points: ["方程"],
+          target_error_type: "方法性错误",
+          source_mistake_ids: input.source_mistakes.map((mistake) => mistake.id)
+        }];
+      },
       async verifyMath() {
         return { verification_status: "passed" as const, reason: "ok" };
       }
@@ -245,6 +257,81 @@ describe("Correction Notebook API", () => {
     expect(final.json().mistake.review_due_at).toBeTruthy();
   });
 
+  it("stores an ungraded attempt and leaves mastery unchanged when DeepSeek grading fails", async () => {
+    const aiProvider = {
+      async analyzeMistake(input: AnalyzeMistakeInput) {
+        return {
+          id: "analysis_ungraded",
+          mistake_id: input.mistake.id,
+          main_error_type: "方法性错误",
+          secondary_error_types: [],
+          error_summary: "需要练习。",
+          wrong_step_location: "列式阶段。",
+          correct_solution_steps: ["读题。", "列式。", "计算。"],
+          avoidance_tip: "先写等量关系。",
+          student_friendly_explanation: "先找关系再算。",
+          confidence: 0.9,
+          needs_human_review: false,
+          model_provider: "deepseek",
+          model_name: "deepseek-v4-pro",
+          created_at: new Date().toISOString()
+        };
+      },
+      async generatePractice(input: GeneratePracticeInput) {
+        return [{
+          id: "gq_ungraded",
+          mistake_id: input.mistake.id,
+          question_text: "一根绳子剪去 5 米后还剩 12 米，原来长多少米？",
+          difficulty: "standard",
+          question_type: "same_pattern",
+          estimated_time_seconds: 120,
+          answer: "17",
+          solution_steps: ["5+12=17"],
+          knowledge_points: ["方程"],
+          target_error_type: "方法性错误",
+          why_related_to_original_mistake: "同类数量关系。",
+          verification_status: "passed",
+          created_at: new Date().toISOString()
+        }];
+      },
+      async gradeAnswer() {
+        throw new Error("DeepSeek timeout");
+      },
+      async generateTestPaper() {
+        return [];
+      },
+      async verifyMath() {
+        return { verification_status: "passed" as const, reason: "ok" };
+      }
+    } satisfies LLMProvider;
+    const app = await createApp({ aiProvider });
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/mistakes",
+      payload: {
+        student_id: "student_1",
+        grade: "初一",
+        ocr_text: "一根绳子剪去 8 米后还剩 17 米，原来长多少米？",
+        student_answer: "17-8"
+      }
+    });
+    const mistakeId = created.json().mistake_id;
+    await app.inject({ method: "POST", url: `/api/v1/mistakes/${mistakeId}/analyze` });
+    const generated = await app.inject({ method: "POST", url: `/api/v1/mistakes/${mistakeId}/generate-practice`, payload: { count: 3 } });
+    const questionId = generated.json().questions[0].id;
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/practice-attempts",
+      payload: { student_id: "student_1", question_id: questionId, answer_text: "17", practice_total: 3 }
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json().attempt.grading_status).toBe("ungraded");
+    expect(response.json().attempt.is_correct).toBeNull();
+    expect(response.json().updated_mastery_status).toBe("practicing");
+  });
+
   it("returns separate student and answer PDF URLs and hides answer URL unless requested", async () => {
     const { app, mistakeId } = await createMistakeAndPractice();
     await app.inject({ method: "POST", url: `/api/v1/mistakes/${mistakeId}/analyze` });
@@ -283,6 +370,8 @@ describe("Correction Notebook API", () => {
 
     expect(hiddenAnswer.json().student_pdf_url).toContain("/student.pdf");
     expect(hiddenAnswer.json()).not.toHaveProperty("answer_pdf_url");
+    expect(hiddenAnswer.json().latex_job.workspace_path).toContain("latex-exams");
+    expect(hiddenAnswer.json().questions[0].id).toContain("tpq");
     expect(visibleAnswer.json().answer_pdf_url).toContain("/answer.pdf");
     expect(visibleAnswer.json().answer_pdf_url).not.toEqual(visibleAnswer.json().student_pdf_url);
   });

@@ -1,6 +1,6 @@
 import { getApiBaseUrl } from "./client";
 import type { AppSettings } from "../types";
-import type { AIAnalysis, GeneratedQuestion } from "@correction-notebook/shared";
+import type { AIAnalysis, GeneratedQuestion, LatexJobHandoff, PracticeAttempt, TestPaper, TestPaperQuestion } from "@correction-notebook/shared";
 
 export type ServerAnalysisResponse = AIAnalysis & {
   analysis_id: string;
@@ -24,6 +24,23 @@ export type EnrichMistakeResult = {
   analysis: ServerAnalysisResponse;
   questions: ServerPracticeResponse["questions"];
   practiceError?: string;
+};
+
+export type SubmitPracticeAttemptResult = {
+  attempt: PracticeAttempt;
+  is_correct: boolean | null;
+  feedback: string;
+  updated_mastery_status: string;
+  grading_status: "graded" | "ungraded";
+};
+
+export type CreateFreshTestPaperResult = {
+  paper_id: string;
+  student_pdf_url: string;
+  answer_pdf_url?: string;
+  latex_job: LatexJobHandoff;
+  paper: TestPaper;
+  questions: TestPaperQuestion[];
 };
 
 export async function enrichMistakeWithServerAI(input: EnrichInput): Promise<EnrichMistakeResult | undefined> {
@@ -92,6 +109,62 @@ export async function enrichMistakeWithServerAI(input: EnrichInput): Promise<Enr
   }
 
   return { analysis, questions: practice.questions };
+}
+
+export async function submitPracticeAttempt(input: {
+  studentId: string;
+  questionId: string;
+  answerText: string;
+  practiceTotal: 3 | 5;
+  model: AppSettings["deepseekModel"];
+}): Promise<SubmitPracticeAttemptResult> {
+  const base = getApiBaseUrl();
+  const response = await fetch(`${base}/api/v1/practice-attempts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      student_id: input.studentId,
+      question_id: input.questionId,
+      answer_text: input.answerText,
+      practice_total: input.practiceTotal,
+      model: input.model
+    })
+  });
+  if (!response.ok && response.status !== 202) {
+    const payload = await readErrorPayload(response);
+    throw new Error(payload?.message ?? payload?.error ?? "practice_grading_failed");
+  }
+  return response.json() as Promise<SubmitPracticeAttemptResult>;
+}
+
+export async function createFreshTestPaper(input: {
+  studentId: string;
+  questionCount: 5 | 10 | 15 | 20;
+  difficultyMode: AppSettings["practiceDifficulty"];
+  includeAnswerPdf: boolean;
+}): Promise<CreateFreshTestPaperResult> {
+  const base = getApiBaseUrl();
+  const response = await fetch(`${base}/api/v1/test-papers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      student_id: input.studentId,
+      question_count: input.questionCount,
+      difficulty_mode: input.difficultyMode,
+      include_answer_pdf: input.includeAnswerPdf,
+      filters: {
+        time_range_days: 30,
+        knowledge_points: [],
+        error_types: [],
+        mastery_statuses: ["not_mastered", "partially_mastered", "relapsed"]
+      }
+    })
+  });
+  if (!response.ok) {
+    const payload = await readErrorPayload(response);
+    throw new Error(payload?.message ?? payload?.error ?? "test_paper_generation_failed");
+  }
+  return response.json() as Promise<CreateFreshTestPaperResult>;
 }
 
 async function readErrorPayload(response: Response | undefined): Promise<{ error?: string; message?: string } | undefined> {

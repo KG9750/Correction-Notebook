@@ -12,7 +12,8 @@ import {
   PracticeAttemptRequestSchema,
   PracticeAttemptSchema,
   TestPaperSchema,
-  computeMasteryFromPractice,
+  TestPaperQuestionSchema,
+  computeMasteryFromGradedAttempts,
   createId,
   defaultKnowledgePointList,
   filterPassedQuestions,
@@ -21,14 +22,14 @@ import {
   normalizeErrorTags,
   nowIso,
   reviewPriorityScore,
-  type GeneratedQuestion,
   type Mistake
 } from "@correction-notebook/shared";
 import Fastify from "fastify";
 import type { ZodError, ZodType } from "zod";
-import { createVirtualPdfUrl } from "./pdf-links.js";
 import { GoogleVisionOcrClient, GoogleVisionConfigurationError } from "./ocr/google.js";
 import { createMemoryStore, type AppStore } from "./store.js";
+
+const latexExamWorkspace = "/Users/leo/Library/Mobile Documents/com~apple~CloudDocs/Personal/M3U Codex Workspace/Zan/latex-exams";
 
 type CreateAppOptions = {
   store?: AppStore;
@@ -192,25 +193,53 @@ export async function createApp(options: CreateAppOptions = {}) {
     const gradeInput = {
       question,
       answer_text: body.answer_text,
-      ...(body.manual_is_correct === undefined ? {} : { manual_is_correct: body.manual_is_correct })
+      ...(body.manual_is_correct === undefined ? {} : { manual_is_correct: body.manual_is_correct }),
+      ...(body.model ? { model: body.model } : {})
     };
-    const grade = await ai.gradeAnswer(gradeInput);
+    const grade = await ai.gradeAnswer(gradeInput).catch((error: unknown) => {
+      request.log.error(error);
+      return undefined;
+    });
+    if (!grade) {
+      const attempt = PracticeAttemptSchema.parse({
+        id: createId("attempt"),
+        student_id: body.student_id,
+        mistake_id: question.mistake_id,
+        generated_question_id: question.id,
+        answer_text: body.answer_text,
+        grading_status: "ungraded",
+        is_correct: null,
+        error_type_if_wrong: null,
+        graded_by: null,
+        feedback: "DeepSeek V4 暂未完成批改。你可以先查看标准答案和解法，稍后重试批改。",
+        grading_error: "deepseek_grading_failed",
+        created_at: nowIso()
+      });
+      store.practiceAttempts.set(attempt.id, attempt);
+
+      return reply.code(202).send({
+        attempt,
+        is_correct: null,
+        feedback: attempt.feedback,
+        updated_mastery_status: mistake.mastery_status,
+        mistake,
+        grading_status: "ungraded"
+      });
+    }
     const attempt = PracticeAttemptSchema.parse({
       id: createId("attempt"),
       student_id: body.student_id,
       mistake_id: question.mistake_id,
       generated_question_id: question.id,
       answer_text: body.answer_text,
+      grading_status: "graded",
       ...grade,
       created_at: nowIso()
     });
     store.practiceAttempts.set(attempt.id, attempt);
 
     const relatedAttempts = [...store.practiceAttempts.values()].filter((item) => item.mistake_id === mistake.id);
-    const total = relatedAttempts.length >= 5 ? 5 : 3;
-    const recent = relatedAttempts.slice(-total);
-    const correct = recent.filter((item) => item.is_correct).length;
-    const updatedMastery = recent.length >= total ? computeMasteryFromPractice(total, correct) : "practicing";
+    const updatedMastery = computeMasteryFromGradedAttempts(body.practice_total, relatedAttempts);
 
     const updated: Mistake = {
       ...mistake,
@@ -230,19 +259,43 @@ export async function createApp(options: CreateAppOptions = {}) {
   });
 
   app.post("/api/v1/test-papers", async (request, reply) => {
+    if (!ai) return reply.code(503).send(deepSeekNotConfiguredError());
     const body = parseOrReply(CreateTestPaperRequestSchema, request.body, reply);
     if (!body) return reply;
 
-    const candidates = selectPaperQuestions(store, body.student_id, body.question_count);
     const paperId = createId("paper");
+    const candidates = selectPaperMistakes(store, body.student_id, body.filters);
+    const questions = await ai.generateTestPaper({
+      student_profile: { grade: candidates[0]?.grade ?? "初一" },
+      question_count: body.question_count,
+      difficulty_mode: body.difficulty_mode,
+      knowledge_distribution: countDistribution(candidates.flatMap((mistake) => mistake.knowledge_points), "综合复习"),
+      error_distribution: countDistribution(candidates.map((mistake) => mistake.main_error_type ?? "待分析"), "待分析"),
+      source_mistakes: candidates,
+    }).catch((error: unknown) => {
+      request.log.error(error);
+      return undefined;
+    });
+    if (!questions || questions.length === 0) {
+      return reply.code(502).send({
+        error: "test_paper_generation_failed",
+        message: "DeepSeek did not return usable fresh test-paper questions."
+      });
+    }
+
+    const parsedQuestions = questions.map((question) => TestPaperQuestionSchema.parse(question));
+    const latexJob = createLatexJobHandoff(paperId);
     const paper = TestPaperSchema.parse({
       id: paperId,
       student_id: body.student_id,
       title: "数学错因复测卷",
       filters: body.filters,
-      question_count: candidates.length,
-      student_pdf_url: createVirtualPdfUrl(paperId, "student"),
-      answer_pdf_url: createVirtualPdfUrl(paperId, "answer"),
+      question_count: parsedQuestions.length,
+      student_pdf_url: latexJob.expected_outputs.student_pdf_path,
+      answer_pdf_url: latexJob.expected_outputs.answer_pdf_path,
+      questions: parsedQuestions,
+      latex_job: latexJob,
+      generation_manifest_url: latexJob.manifest_path,
       created_at: nowIso()
     });
     store.testPapers.set(paper.id, paper);
@@ -251,8 +304,9 @@ export async function createApp(options: CreateAppOptions = {}) {
       paper_id: paper.id,
       student_pdf_url: paper.student_pdf_url,
       answer_pdf_url: body.include_answer_pdf ? paper.answer_pdf_url : undefined,
+      latex_job: latexJob,
       paper,
-      questions: candidates
+      questions: parsedQuestions
     };
   });
 
@@ -272,13 +326,46 @@ function deepSeekNotConfiguredError() {
   };
 }
 
-function selectPaperQuestions(store: AppStore, studentId: string, questionCount: number): GeneratedQuestion[] {
-  const relatedMistakeIds = new Set(
-    [...store.mistakes.values()].filter((mistake) => mistake.student_id === studentId).map((mistake) => mistake.id)
-  );
-  return [...store.generatedQuestions.values()]
-    .filter((question) => relatedMistakeIds.has(question.mistake_id) && question.verification_status === "passed")
-    .slice(0, questionCount);
+function selectPaperMistakes(
+  store: AppStore,
+  studentId: string,
+  filters: { knowledge_points: string[]; error_types: string[]; mastery_statuses: string[] }
+): Mistake[] {
+  const selected = [...store.mistakes.values()].filter((mistake) => {
+    if (mistake.student_id !== studentId) return false;
+    if (filters.mastery_statuses.length > 0 && !filters.mastery_statuses.includes(mistake.mastery_status)) return false;
+    if (filters.knowledge_points.length > 0 && !mistake.knowledge_points.some((point) => filters.knowledge_points.includes(point))) return false;
+    if (filters.error_types.length > 0 && (!mistake.main_error_type || !filters.error_types.includes(mistake.main_error_type))) return false;
+    return true;
+  });
+  return selected.length > 0 ? selected : [...store.mistakes.values()].filter((mistake) => mistake.student_id === studentId);
+}
+
+function countDistribution(values: string[], fallback: string): Array<{ knowledge_point: string; count: number }> & Array<{ error_type: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const value of values) {
+    const label = value.trim() || fallback;
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  if (counts.size === 0) counts.set(fallback, 1);
+  return Array.from(counts.entries())
+    .sort(([leftLabel, leftCount], [rightLabel, rightCount]) => rightCount - leftCount || leftLabel.localeCompare(rightLabel))
+    .map(([label, count]) => ({ knowledge_point: label, error_type: label, count })) as Array<{ knowledge_point: string; count: number }> & Array<{ error_type: string; count: number }>;
+}
+
+function createLatexJobHandoff(paperId: string) {
+  const outputDir = `${latexExamWorkspace}/output/${paperId}`;
+  return {
+    id: createId("latex_job"),
+    workspace_path: latexExamWorkspace,
+    manifest_path: `${latexExamWorkspace}/jobs/${paperId}.json`,
+    status: "queued" as const,
+    expected_outputs: {
+      student_pdf_path: `${outputDir}/student.pdf`,
+      answer_pdf_path: `${outputDir}/answer.pdf`
+    },
+    output_paths: {}
+  };
 }
 
 function findMistake(store: AppStore, mistakeId: string, reply: { code: (statusCode: number) => { send: (payload: unknown) => unknown } }): Mistake | undefined {

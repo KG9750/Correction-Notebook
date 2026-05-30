@@ -1,11 +1,22 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import type { AppSettings } from "../types";
-import type { IconName } from "../ui/components";
 import { Panel } from "../ui/components";
 import { palette, styles } from "../ui/styles";
 
-export function SettingsScreen({ settings, onChange }: { settings: AppSettings; onChange: (patch: Partial<AppSettings>) => void }) {
+export function SettingsScreen({
+  settings,
+  onChange,
+  backupStatus,
+  onExportBackup,
+  onImportBackup
+}: {
+  settings: AppSettings;
+  onChange: (patch: Partial<AppSettings>) => void;
+  backupStatus: string;
+  onExportBackup: () => void;
+  onImportBackup: () => void;
+}) {
   return (
     <ScrollView contentContainerStyle={styles.screen}>
       <View style={styles.screenHeader}>
@@ -53,6 +64,25 @@ export function SettingsScreen({ settings, onChange }: { settings: AppSettings; 
             <SegmentButton label="挑战" active={settings.practiceDifficulty === "challenge"} onPress={() => onChange({ practiceDifficulty: "challenge" })} />
           </View>
         </View>
+      </Panel>
+      <Panel title="iCloud Drive 备份">
+        <View style={styles.settingRow}>
+          <View style={styles.settingText}>
+            <Text style={styles.settingTitle}>本地可恢复备份</Text>
+            <Text style={styles.settingDescription}>导出结构化错题数据、图片资产引用、正式复测卷 PDF 和生成 manifest。</Text>
+          </View>
+          <View style={styles.formActions}>
+            <Pressable style={styles.segmentButton} onPress={onExportBackup}>
+              <Ionicons name="cloud-upload-outline" size={18} color={palette.primary} />
+              <Text style={styles.segmentButtonText}>导出</Text>
+            </Pressable>
+            <Pressable style={styles.segmentButton} onPress={onImportBackup}>
+              <Ionicons name="cloud-download-outline" size={18} color={palette.primary} />
+              <Text style={styles.segmentButtonText}>恢复</Text>
+            </Pressable>
+          </View>
+        </View>
+        {backupStatus ? <Text style={styles.bodyText}>{backupStatus}</Text> : null}
       </Panel>
     </ScrollView>
   );

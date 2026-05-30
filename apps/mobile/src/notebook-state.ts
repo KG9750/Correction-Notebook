@@ -1,6 +1,8 @@
 import {
-  computeMasteryFromPractice,
+  computeMasteryFromGradedAttempts,
   createId,
+  dueReviewMistakes,
+  hasMasteryConfirmationEvidence,
   nextReviewDueForMastery,
   nowIso,
   type AIAnalysis,
@@ -151,27 +153,22 @@ export function deleteMistake(state: NotebookState, mistakeId: string): Notebook
   };
 }
 
-export function recordPracticeAttempt(state: NotebookState, questionId: string, answerText: string, isCorrect: boolean): NotebookState {
-  const question = state.generatedQuestions.find((item) => item.id === questionId);
+export function recordPracticeAttempt(state: NotebookState, attempt: PracticeAttempt, practiceTotal: 3 | 5): NotebookState {
+  const question = state.generatedQuestions.find((item) => item.id === attempt.generated_question_id);
   if (!question) return state;
 
-  const attempt = {
-    id: createId("local_attempt"),
-    student_id: state.profile.id,
-    mistake_id: question.mistake_id,
-    generated_question_id: question.id,
-    questionText: question.question_text,
-    answer_text: answerText,
-    is_correct: isCorrect,
-    error_type_if_wrong: isCorrect ? null : question.target_error_type,
-    graded_by: "manual" as const,
-    feedback: isCorrect ? "答对了。等量关系已经写清楚。" : "这次仍然和原错因有关，先写等量关系再计算。",
-    created_at: nowIso()
-  } satisfies PracticeAttempt & { questionText: string };
+  const localAttempt = {
+    ...attempt,
+    questionText: question.question_text
+  };
 
-  const attempts = [...state.attempts, attempt];
-  const related = attempts.filter((item) => item.mistake_id === question.mistake_id).slice(-3);
-  const computedMastery = related.length === 3 ? computeMasteryFromPractice(3, related.filter((item) => item.is_correct).length) : "practicing";
+  const attempts = [...state.attempts, localAttempt];
+  if (attempt.grading_status !== "graded") {
+    return { ...state, attempts };
+  }
+
+  const related = attempts.filter((item) => item.mistake_id === question.mistake_id);
+  const computedMastery = computeMasteryFromGradedAttempts(practiceTotal, related);
   const mastery = computedMastery === "mastered" ? "practicing" : computedMastery;
 
   return {
@@ -191,6 +188,7 @@ export function recordPracticeAttempt(state: NotebookState, questionId: string, 
 }
 
 export function confirmMistakeMastered(state: NotebookState, mistakeId: string): NotebookState {
+  if (!canConfirmMistakeMastered(state, mistakeId)) return state;
   const remainingActiveMistakes = state.mistakes.filter((mistake) => mistake.id !== mistakeId && !state.archivedMistakeIds.includes(mistake.id));
   const nextSelectedMistakeId = state.selectedMistakeId === mistakeId
     ? remainingActiveMistakes[0]?.id ?? mistakeId
@@ -216,23 +214,16 @@ export function confirmMistakeMastered(state: NotebookState, mistakeId: string):
   };
 }
 
-export function createTestPaper(state: NotebookState): NotebookState {
-  const id = createId("local_paper");
-  const paper = {
-    id,
-    student_id: state.profile.id,
-    title: "一元一次方程错因复测卷",
-    filters: {
-      time_range_days: 30,
-      knowledge_points: ["一元一次方程"],
-      error_types: ["方法性错误"],
-      mastery_statuses: ["not_mastered", "partially_mastered"]
-    },
-    question_count: Math.min(10, state.generatedQuestions.length),
-    student_pdf_url: `local://test-papers/${id}/student.pdf`,
-    answer_pdf_url: `local://test-papers/${id}/answer.pdf`,
-    created_at: nowIso()
-  } satisfies TestPaper;
+export function canConfirmMistakeMastered(state: NotebookState, mistakeId: string): boolean {
+  const related = state.attempts.filter((attempt) => attempt.mistake_id === mistakeId);
+  return hasMasteryConfirmationEvidence(state.settings.practiceCount, related);
+}
 
+export function getDueReviewMistakes(state: NotebookState, asOf = new Date()): Mistake[] {
+  const activeMistakes = state.mistakes.filter((mistake) => !state.archivedMistakeIds.includes(mistake.id));
+  return dueReviewMistakes(activeMistakes, asOf);
+}
+
+export function recordTestPaper(state: NotebookState, paper: TestPaper): NotebookState {
   return { ...state, activeSection: "paper", papers: [paper, ...state.papers] };
 }

@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import type { GeneratedQuestion, Mistake } from "@correction-notebook/shared";
+import type { GeneratedQuestion, Mistake, PracticeAttempt } from "@correction-notebook/shared";
 import { useEffect, useState } from "react";
 import { Image, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from "react-native";
 import type { ImageSize } from "../crop/rect";
@@ -27,7 +27,7 @@ export function NotebookScreen({
   selectedMistake: Mistake;
   enrichingMistakeId: string | null;
   onSelectMistake: (id: string) => void;
-  onAttempt: (question: GeneratedQuestion, answer: string, correct: boolean) => void;
+  onAttempt: (question: GeneratedQuestion, answer: string) => Promise<PracticeAttempt>;
   onUpdateMistake: (
     mistakeId: string,
     patch: Pick<Mistake, "normalized_question_text" | "ocr_text" | "student_answer" | "knowledge_points" | "main_error_type" | "secondary_error_types">
@@ -50,7 +50,8 @@ export function NotebookScreen({
   const [editSecondaryErrorTypes, setEditSecondaryErrorTypes] = useState(selectedMistake.secondary_error_types.join("、"));
   const analysis = state.analyses.find((item) => item.mistake_id === selectedMistake.id);
   const questions = state.generatedQuestions.filter((question) => question.mistake_id === selectedMistake.id);
-  const practiceCompletion = getPracticeCompletion(questions, state.attempts);
+  const visibleQuestions = questions.slice(0, state.settings.practiceCount);
+  const practiceCompletion = getPracticeCompletion(visibleQuestions, state.attempts);
   const modelLabel = deepseekModel === "deepseek-v4-flash" ? "DeepSeek V4 Flash" : "DeepSeek V4 Pro";
   const detailImageAspect = detailImageSize ? detailImageSize.width / detailImageSize.height : undefined;
   const detailImageHeight = detailImageAspect ? Math.max(150, Math.min(360, 340 / detailImageAspect)) : undefined;
@@ -181,7 +182,7 @@ export function NotebookScreen({
           )}
         </Panel>
         <Panel
-          title="3 道变式练习"
+          title={`${state.settings.practiceCount} 道变式练习`}
           action={
             <SecondaryButton
               icon="refresh-outline"
@@ -192,15 +193,15 @@ export function NotebookScreen({
             />
           }
         >
-          {practiceGenerationStatus === "generating" && questions.length > 0 ? (
+          {practiceGenerationStatus === "generating" && visibleQuestions.length > 0 ? (
             <View style={styles.practiceStatusBox}>
               <Ionicons name="sync-outline" size={18} color={palette.teal} />
               <Text style={styles.bodyText}>{modelLabel} 正在刷新变式练习，当前题目可先继续查看。</Text>
             </View>
           ) : null}
-          {questions.length > 0 ? (
+          {visibleQuestions.length > 0 ? (
             <>
-              {questions.map((question) => (
+              {visibleQuestions.map((question) => (
                 <PracticeQuestion key={question.id} question={question} onAttempt={onAttempt} />
               ))}
               {practiceCompletion.allAnswered ? (
@@ -212,12 +213,12 @@ export function NotebookScreen({
                   />
                   <View style={styles.masteryConfirmText}>
                     <Text style={styles.practiceTitle}>
-                      {practiceCompletion.allCorrect ? "变式练习已全部正确" : "变式练习还未全部正确"}
+                      {practiceCompletion.allCorrect ? "已批改练习全部正确" : "练习还未全部批改正确"}
                     </Text>
                     <Text style={styles.practiceReason}>
                       {practiceCompletion.allCorrect
                         ? "确认后，这道错题会移动到错题集，并按知识点大类归档。"
-                        : "先把错题相关变式全部做对，再确认掌握。"}
+                        : "DeepSeek V4 批改达到掌握标准后，才可以确认掌握。"}
                     </Text>
                   </View>
                   {practiceCompletion.allCorrect ? (
@@ -322,14 +323,17 @@ function normalizePrimaryErrorType(value: string): Mistake["main_error_type"] {
     : "方法性错误";
 }
 
-function PracticeQuestion({ question, onAttempt }: { question: GeneratedQuestion; onAttempt: (question: GeneratedQuestion, answer: string, correct: boolean) => void }) {
+function PracticeQuestion({ question, onAttempt }: { question: GeneratedQuestion; onAttempt: (question: GeneratedQuestion, answer: string) => Promise<PracticeAttempt> }) {
   const [answer, setAnswer] = useState("");
-  const [result, setResult] = useState<"correct" | "wrong" | undefined>();
-  const normalizedAnswer = (value: string) => value.replace(/\s+/g, "").toLowerCase();
+  const [result, setResult] = useState<PracticeAttempt | undefined>();
+  const [isGrading, setIsGrading] = useState(false);
   const judgeAnswer = () => {
-    const isCorrect = Boolean(answer.trim()) && normalizedAnswer(answer) === normalizedAnswer(question.answer);
-    setResult(isCorrect ? "correct" : "wrong");
-    onAttempt(question, answer || "未填写", isCorrect);
+    if (isGrading) return;
+    setIsGrading(true);
+    setResult(undefined);
+    onAttempt(question, answer || "未填写")
+      .then(setResult)
+      .finally(() => setIsGrading(false));
   };
 
   return (
@@ -343,19 +347,25 @@ function PracticeQuestion({ question, onAttempt }: { question: GeneratedQuestion
             setAnswer(value);
             setResult(undefined);
           }}
-          placeholder="输入答案后判定"
+          placeholder="输入答案后交给 DeepSeek V4 批改"
           returnKeyType="done"
           onSubmitEditing={judgeAnswer}
           style={[styles.input, styles.answerInput]}
         />
-        <Pressable accessibilityRole="button" accessibilityLabel="判定答案" style={styles.answerJudgeButton} onPress={judgeAnswer}>
-          <Ionicons name="checkmark-circle-outline" size={22} color={palette.canvas} />
+        <Pressable accessibilityRole="button" accessibilityLabel="提交答案批改" style={styles.answerJudgeButton} onPress={judgeAnswer}>
+          <Ionicons name={isGrading ? "sync-outline" : "checkmark-circle-outline"} size={22} color={palette.canvas} />
         </Pressable>
       </View>
+      {isGrading ? <Text style={styles.bodyText}>DeepSeek V4 正在批改…</Text> : null}
       {result ? (
-        <Text style={result === "correct" ? styles.correctText : styles.wrongText}>
-          {result === "correct" ? "判定正确" : "判定错误，可修改后再次判定"}
-        </Text>
+        <View>
+          <Text style={result.grading_status === "ungraded" ? styles.wrongText : result.is_correct ? styles.correctText : styles.wrongText}>
+            {result.grading_status === "ungraded" ? "暂未批改" : result.is_correct ? "DeepSeek V4 判定正确" : "DeepSeek V4 判定错误，可修改后重试"}
+          </Text>
+          <Text style={styles.practiceReason}>{result.feedback}</Text>
+          <Text style={styles.practiceReason}>标准答案：{question.answer}</Text>
+          <Text style={styles.practiceReason}>解法：{question.solution_steps.join("；")}</Text>
+        </View>
       ) : null}
     </View>
   );
@@ -369,8 +379,8 @@ function getPracticeCompletion(questions: GeneratedQuestion[], attempts: Noteboo
     latestAttemptByQuestion.set(attempt.generated_question_id, attempt);
   });
   const latestAttempts = questions.map((question) => latestAttemptByQuestion.get(question.id));
-  const allAnswered = latestAttempts.every(Boolean);
-  const allCorrect = allAnswered && latestAttempts.every((attempt) => attempt?.is_correct);
+  const allAnswered = latestAttempts.every((attempt) => attempt?.grading_status === "graded");
+  const allCorrect = allAnswered && latestAttempts.every((attempt) => attempt?.is_correct === true);
 
   return { allAnswered, allCorrect };
 }

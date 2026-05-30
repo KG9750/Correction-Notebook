@@ -2,10 +2,11 @@ import {
   type AIAnalysis,
   type GeneratedQuestion,
   type PracticeAttempt,
+  type TestPaperQuestion,
   createId,
   nowIso
 } from "@correction-notebook/shared";
-import type { GeneratePracticeInput, GradeAnswerInput, LLMProvider, VerifyMathInput, VerifyMathOutput, AnalyzeMistakeInput } from "./provider.js";
+import type { AnalyzeMistakeInput, GeneratePracticeInput, GenerateTestPaperInput, GradeAnswerInput, LLMProvider, VerifyMathInput, VerifyMathOutput } from "./provider.js";
 
 function inferMainError(text: string): AIAnalysis["main_error_type"] {
   if (/单位|格式|证明|答案/.test(text)) return "表达性错误";
@@ -128,6 +129,23 @@ export class MockLLMProvider implements LLMProvider {
       error_type_if_wrong: isCorrect ? null : input.question.target_error_type,
       graded_by: input.manual_is_correct === undefined ? "ai" : "manual"
     };
+  }
+
+  async generateTestPaper(input: GenerateTestPaperInput): Promise<TestPaperQuestion[]> {
+    const primaryPoint = input.knowledge_distribution[0]?.knowledge_point ?? input.source_mistakes[0]?.knowledge_points[0] ?? "一元一次方程";
+    const primaryError = input.error_distribution[0]?.error_type ?? input.source_mistakes[0]?.main_error_type ?? "方法性错误";
+    const count = Math.min(input.question_count, 20);
+
+    return Array.from({ length: count }, (_, index) => ({
+      id: createId("tpq"),
+      question_text: `复测题 ${index + 1}：围绕${primaryPoint}设计一道新的数学题，并避免${primaryError}。`,
+      difficulty: input.difficulty_mode === "adaptive" ? (index % 3 === 0 ? "basic" : "standard") : input.difficulty_mode,
+      answer: `答案 ${index + 1}`,
+      solution_steps: ["读清题意。", "写出等量关系。", "计算并检查。"],
+      knowledge_points: [primaryPoint],
+      target_error_type: primaryError,
+      source_mistake_ids: input.source_mistakes.slice(0, 3).map((mistake) => mistake.id)
+    }));
   }
 
   async verifyMath(input: VerifyMathInput): Promise<VerifyMathOutput> {
