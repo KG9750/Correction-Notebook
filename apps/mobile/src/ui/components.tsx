@@ -61,11 +61,16 @@ export function PrimaryAction({ icon, label, onPress }: { icon: IconName; label:
   );
 }
 
-export function SecondaryButton({ icon, label, onPress }: { icon: IconName; label: string; onPress: () => void }) {
+export function SecondaryButton({ icon, label, onPress, disabled = false }: { icon: IconName; label: string; onPress: () => void; disabled?: boolean }) {
   return (
-    <Pressable style={styles.secondaryButton} onPress={onPress}>
-      <Ionicons name={icon} size={18} color={palette.ink} />
-      <Text style={styles.secondaryButtonText}>{label}</Text>
+    <Pressable
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      style={[styles.secondaryButton, disabled && styles.secondaryButtonDisabled]}
+      onPress={onPress}
+    >
+      <Ionicons name={icon} size={18} color={disabled ? palette.muted : palette.ink} />
+      <Text style={[styles.secondaryButtonText, disabled && styles.secondaryButtonTextDisabled]}>{label}</Text>
     </Pressable>
   );
 }

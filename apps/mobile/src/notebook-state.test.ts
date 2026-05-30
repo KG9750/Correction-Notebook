@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addCapturedMistake, canConfirmMistakeMastered, confirmMistakeMastered, createInitialNotebookState, deleteMistake, getDueReviewMistakes, recordPracticeAttempt, replaceMistakeAI, updateMistake, withDefaultSettings } from "./notebook-state";
+import { addCapturedMistake, canConfirmMistakeMastered, confirmMistakeMastered, createInitialNotebookState, createPreviewTestPaper, deleteMistake, getDueReviewMistakes, recordPracticeAttempt, replaceMistakeAI, updateMistake, withDefaultSettings } from "./notebook-state";
 import { sampleAnalyses, sampleGeneratedQuestions, sampleMistakes } from "./sample-data";
 import { createNotebookBackupManifest, restoreNotebookStateFromBackup, serializeNotebookBackupManifest } from "./storage/backup-package";
 import { parseArchivedNotebookState, serializeNotebookStateForArchive } from "./storage/codec";
@@ -118,6 +118,23 @@ describe("mobile notebook state", () => {
     );
 
     expect(next.mistakes[0]?.knowledge_points).toEqual(["集合与逻辑", "子集计数"]);
+  });
+
+  it("keeps existing generated questions when a refresh returns analysis but no usable practice", () => {
+    const state = stateWithSamples();
+    const next = replaceMistakeAI(
+      state,
+      "mistake_001",
+      {
+        ...sampleAnalyses[0]!,
+        id: "analysis_refresh",
+        error_summary: "刷新只更新了讲解。"
+      },
+      []
+    );
+
+    expect(next.analyses[0]?.id).toBe("analysis_refresh");
+    expect(next.generatedQuestions.filter((question) => question.mistake_id === "mistake_001")).toHaveLength(3);
   });
 
   it("updates mastery after three local practice attempts", () => {
@@ -241,6 +258,15 @@ describe("mobile notebook state", () => {
     ]);
     expect(restored.mistakes[0]?.original_image_uri).toMatch(/^backup:\/\//);
     expect(restored.papers[0]?.student_pdf_url).toMatch(/^backup:\/\//);
+  });
+
+  it("creates a non-final local preview test paper from existing generated questions", () => {
+    const paper = createPreviewTestPaper(stateWithSamples());
+
+    expect(paper?.title).toContain("非正式");
+    expect(paper?.questions).toHaveLength(3);
+    expect(paper?.student_pdf_url).toMatch(/^local-preview:\/\//);
+    expect(paper?.latex_job?.status).toBe("failed");
   });
 
   it("serializes changed notebook state so a reload can restore edits, attempts, archives, and settings", () => {

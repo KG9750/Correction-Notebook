@@ -26,13 +26,17 @@ export function replaceMistakeAI(
   analysis: AIAnalysis,
   questions: GeneratedQuestion[]
 ): NotebookState {
+  const nextQuestions = questions.length > 0
+    ? [
+        ...questions.filter((q) => !state.generatedQuestions.some((existing) => existing.id === q.id)),
+        ...state.generatedQuestions.filter((q) => q.mistake_id !== mistakeId)
+      ]
+    : state.generatedQuestions;
+
   return {
     ...state,
     analyses: [analysis, ...state.analyses.filter((a) => a.mistake_id !== mistakeId && a.id !== analysis.id)],
-    generatedQuestions: [
-      ...questions.filter((q) => !state.generatedQuestions.some((existing) => existing.id === q.id)),
-      ...state.generatedQuestions.filter((q) => q.mistake_id !== mistakeId)
-    ],
+    generatedQuestions: nextQuestions,
     mistakes: state.mistakes.map((m) =>
       m.id === mistakeId
         ? {
@@ -226,4 +230,50 @@ export function getDueReviewMistakes(state: NotebookState, asOf = new Date()): M
 
 export function recordTestPaper(state: NotebookState, paper: TestPaper): NotebookState {
   return { ...state, activeSection: "paper", papers: [paper, ...state.papers] };
+}
+
+export function createPreviewTestPaper(state: NotebookState): TestPaper | undefined {
+  const questions = state.generatedQuestions.slice(0, 10);
+  if (questions.length === 0) return undefined;
+
+  const id = createId("local_paper");
+  return {
+    id,
+    student_id: state.profile.id,
+    title: "非正式复测卷预览",
+    filters: {
+      time_range_days: 30,
+      knowledge_points: [...new Set(questions.flatMap((question) => question.knowledge_points))],
+      error_types: [...new Set(questions.map((question) => question.target_error_type))],
+      mastery_statuses: ["not_mastered", "partially_mastered", "relapsed"]
+    },
+    question_count: questions.length,
+    student_pdf_url: `local-preview://test-papers/${id}/student.pdf`,
+    answer_pdf_url: `local-preview://test-papers/${id}/answer.pdf`,
+    questions: questions.map((question) => ({
+      id: question.id,
+      question_text: question.question_text,
+      ...(question.question_latex ? { question_latex: question.question_latex } : {}),
+      difficulty: question.difficulty,
+      answer: question.answer,
+      solution_steps: question.solution_steps,
+      knowledge_points: question.knowledge_points,
+      target_error_type: question.target_error_type,
+      source_mistake_ids: [question.mistake_id]
+    })),
+    latex_job: {
+      id: createId("local_latex_job"),
+      workspace_path: "local-preview",
+      manifest_path: `local-preview://test-papers/${id}/manifest.json`,
+      status: "failed",
+      expected_outputs: {
+        student_pdf_path: `local-preview://test-papers/${id}/student.pdf`,
+        answer_pdf_path: `local-preview://test-papers/${id}/answer.pdf`
+      },
+      output_paths: {},
+      failure_reason: "DeepSeek V4 或 Claude Code LaTeX 任务不可用，已生成非正式预览。"
+    },
+    generation_manifest_url: `local-preview://test-papers/${id}/manifest.json`,
+    created_at: nowIso()
+  };
 }

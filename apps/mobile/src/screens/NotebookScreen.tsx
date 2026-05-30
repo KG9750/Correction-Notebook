@@ -246,6 +246,31 @@ export function NotebookScreen({
             <Text style={styles.bodyText}>{modelLabel} 生成完成后会显示变式练习。</Text>
           )}
         </Panel>
+        <Panel title="掌握与存档">
+          <View style={practiceCompletion.allCorrect ? styles.masteryConfirmBox : styles.masteryWaitingBox}>
+            <Ionicons
+              name={practiceCompletion.allCorrect ? "archive-outline" : "lock-closed-outline"}
+              size={20}
+              color={practiceCompletion.allCorrect ? palette.teal : palette.primary}
+            />
+            <View style={styles.masteryConfirmText}>
+              <Text style={styles.practiceTitle}>
+                {practiceCompletion.allCorrect ? "可以存档到错题集" : "完成 DeepSeek 批改后再存档"}
+              </Text>
+              <Text style={styles.practiceReason}>
+                {practiceCompletion.allCorrect
+                  ? "存档后仍可在错题集查看；后续复测失败时再回到错题本。"
+                  : `需要 ${state.settings.practiceCount} 道变式练习全部由 DeepSeek V4 判定正确。`}
+              </Text>
+            </View>
+            <SecondaryButton
+              icon="archive-outline"
+              label="存档到错题集"
+              disabled={!practiceCompletion.allCorrect}
+              onPress={() => onConfirmMastered(selectedMistake.id)}
+            />
+          </View>
+        </Panel>
       </ScrollView>
     </View>
   );

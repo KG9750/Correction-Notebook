@@ -618,10 +618,16 @@ export const styles = StyleSheet.create({
     gap: 8,
     backgroundColor: "#f8efe4"
   },
+  secondaryButtonDisabled: {
+    opacity: 0.58
+  },
   secondaryButtonText: {
     color: palette.ink,
     fontFamily: bodyFont,
     fontWeight: "700"
+  },
+  secondaryButtonTextDisabled: {
+    color: palette.muted
   },
   inputLabel: {
     fontSize: 13,

@@ -268,7 +268,7 @@ ${sourceSummary}
     }
 
     const body = JSON.stringify({
-      model,
+      model: resolveDeepSeekApiModel(model),
       messages: [
         { role: "system", content: SYSTEM_MATH_TUTOR },
         { role: "user", content: userPrompt }
@@ -320,6 +320,16 @@ ${sourceSummary}
 const VALID_ERROR_TYPES = ["知识性错误", "审题性错误", "方法性错误", "过程性错误", "表达性错误", "习惯性错误"] as const;
 const VALID_QUESTION_TYPES = ["same_pattern", "condition_change", "trap", "number_change", "integrated"] as const;
 const VALID_DIFFICULTIES = ["basic", "standard", "challenge"] as const;
+
+export function resolveDeepSeekApiModel(model: string): string {
+  if (model === "deepseek-v4-pro") {
+    return process.env.DEEPSEEK_V4_PRO_MODEL ?? process.env.DEEPSEEK_MODEL ?? "deepseek-chat";
+  }
+  if (model === "deepseek-v4-flash") {
+    return process.env.DEEPSEEK_V4_FLASH_MODEL ?? process.env.DEEPSEEK_MODEL ?? "deepseek-chat";
+  }
+  return model;
+}
 
 type RawAnalysis = {
   main_error_type?: string;

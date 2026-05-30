@@ -15,6 +15,7 @@ import {
   addCapturedMistake,
   confirmMistakeMastered,
   createInitialNotebookState,
+  createPreviewTestPaper,
   deleteMistake,
   getDueReviewMistakes,
   recordPracticeAttempt,
@@ -101,6 +102,7 @@ export function CorrectionNotebookApp() {
   };
   const createPaper = () => {
     if (paperGenerationStatus === "generating") return;
+    setState((current) => ({ ...current, activeSection: "paper" }));
     setPaperGenerationStatus("generating");
     setPaperGenerationError("");
     createFreshTestPaper({
@@ -112,8 +114,13 @@ export function CorrectionNotebookApp() {
       setState((current) => recordTestPaper(current, result.paper));
       setPaperGenerationStatus("idle");
     }).catch((error: unknown) => {
+      setState((current) => {
+        const preview = createPreviewTestPaper(current);
+        return preview ? recordTestPaper(current, preview) : current;
+      });
       setPaperGenerationStatus("failed");
-      setPaperGenerationError(error instanceof Error ? error.message : "复测卷生成失败。");
+      const reason = error instanceof Error ? error.message : "复测卷生成失败。";
+      setPaperGenerationError(`${reason}。如页面出现非正式预览，可先用于检查题面；正式复测卷需等待 DeepSeek V4 和 Claude Code LaTeX 任务恢复。`);
     });
   };
   const exportBackup = () => {
@@ -417,7 +424,11 @@ function PaperScreen({
       {latestPaper ? (
         <Panel title="PDF 与打印">
           <Text style={styles.bodyText}>正式复测卷任务：{latestPaper.latex_job?.status ?? "queued"}。输出目录：{latestPaper.latex_job?.expected_outputs.student_pdf_path ?? latestPaper.student_pdf_url}</Text>
-          <Text style={styles.tipText}>下方 HTML/Expo 打印仅作为非正式预览；正式学生卷和答案卷以 Claude Code + LaTeX 输出 PDF 为准。</Text>
+          <Text style={styles.tipText}>
+            {latestPaper.student_pdf_url.startsWith("local-preview://")
+              ? "这是后端生成失败后的非正式预览，正式学生卷和答案卷仍需 DeepSeek V4 + Claude Code LaTeX 生成。"
+              : "下方 HTML/Expo 打印仅作为非正式预览；正式学生卷和答案卷以 Claude Code + LaTeX 输出 PDF 为准。"}
+          </Text>
           <View style={styles.formActions}>
             <SecondaryButton icon="print-outline" label="打印学生卷" onPress={() => printHtml(studentHtml)} />
             <SecondaryButton icon="share-outline" label="分享学生 PDF" onPress={() => sharePdf(studentHtml)} />
