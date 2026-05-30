@@ -2,6 +2,7 @@ import cors from "@fastify/cors";
 import { DeepSeekProvider, MockLLMProvider, type LLMProvider } from "@correction-notebook/ai";
 import {
   AIAnalysisSchema,
+  AnalyzeMistakeRequestSchema,
   CreateMistakeRequestSchema,
   CreateTestPaperRequestSchema,
   GeneratedQuestionSchema,
@@ -38,7 +39,7 @@ type CreateAppOptions = {
 export async function createApp(options: CreateAppOptions = {}) {
   const app = Fastify({ logger: process.env.NODE_ENV !== "test", bodyLimit: 8 * 1024 * 1024 });
   const store = options.store ?? createMemoryStore();
-  const ai = options.aiProvider ?? (process.env.DEEPSEEK_API_KEY ? new DeepSeekProvider() : new MockLLMProvider());
+  const ai = options.aiProvider ?? createDefaultAiProvider();
   const ocrClient = options.ocrClient ?? new GoogleVisionOcrClient();
 
   await app.register(cors, { origin: true });
@@ -101,12 +102,16 @@ export async function createApp(options: CreateAppOptions = {}) {
   });
 
   app.post("/api/v1/mistakes/:mistakeId/analyze", async (request, reply) => {
+    if (!ai) return reply.code(503).send(deepSeekNotConfiguredError());
     const mistake = findMistake(store, (request.params as { mistakeId: string }).mistakeId, reply);
     if (!mistake) return reply;
+    const body = parseOrReply(AnalyzeMistakeRequestSchema, request.body ?? {}, reply);
+    if (!body) return reply;
 
     const rawAnalysis = await ai.analyzeMistake({
       student_profile: { grade: mistake.grade },
-      mistake
+      mistake,
+      ...(body.model ? { model: body.model } : {})
     });
     const analysis = AIAnalysisSchema.parse(rawAnalysis);
     const tags = normalizeErrorTags({
@@ -129,6 +134,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   });
 
   app.post("/api/v1/mistakes/:mistakeId/generate-practice", async (request, reply) => {
+    if (!ai) return reply.code(503).send(deepSeekNotConfiguredError());
     const mistake = findMistake(store, (request.params as { mistakeId: string }).mistakeId, reply);
     if (!mistake) return reply;
     const body = parseOrReply(GeneratePracticeRequestSchema, request.body, reply);
@@ -137,9 +143,31 @@ export async function createApp(options: CreateAppOptions = {}) {
     const generated = await ai.generatePractice({
       mistake,
       count: body.count,
-      difficulty_mode: body.difficulty_mode
+      difficulty_mode: body.difficulty_mode,
+      ...(body.model ? { model: body.model } : {})
+    }).catch((error: unknown) => {
+      request.log.error(error);
+      return undefined;
     });
+    if (!generated) {
+      return reply.code(502).send({
+        error: "practice_generation_failed",
+        message: "DeepSeek did not complete practice generation."
+      });
+    }
+    if (generated.length === 0) {
+      return reply.code(502).send({
+        error: "practice_generation_empty",
+        message: "DeepSeek did not return usable practice questions."
+      });
+    }
     const passed = filterPassedQuestions(generated.map((question) => GeneratedQuestionSchema.parse(question)));
+    if (passed.length === 0) {
+      return reply.code(502).send({
+        error: "practice_generation_filtered",
+        message: `DeepSeek returned ${generated.length} question(s), but none passed verification.`
+      });
+    }
     for (const question of passed) store.generatedQuestions.set(question.id, question);
 
     const updated: Mistake = {
@@ -153,6 +181,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   });
 
   app.post("/api/v1/practice-attempts", async (request, reply) => {
+    if (!ai) return reply.code(503).send(deepSeekNotConfiguredError());
     const body = parseOrReply(PracticeAttemptRequestSchema, request.body, reply);
     if (!body) return reply;
     const question = store.generatedQuestions.get(body.question_id);
@@ -228,6 +257,19 @@ export async function createApp(options: CreateAppOptions = {}) {
   });
 
   return app;
+}
+
+function createDefaultAiProvider(): LLMProvider | undefined {
+  if (process.env.DEEPSEEK_API_KEY) return new DeepSeekProvider();
+  if (process.env.NODE_ENV === "test") return new MockLLMProvider();
+  return undefined;
+}
+
+function deepSeekNotConfiguredError() {
+  return {
+    error: "deepseek_not_configured",
+    message: "Set DEEPSEEK_API_KEY on the API service to enable DeepSeek V4 analysis and practice generation."
+  };
 }
 
 function selectPaperQuestions(store: AppStore, studentId: string, questionCount: number): GeneratedQuestion[] {

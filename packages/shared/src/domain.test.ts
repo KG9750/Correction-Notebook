@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   computeMasteryFromPractice,
   filterPassedQuestions,
+  initialMistakeStatus,
   nextReviewDueForMastery,
   normalizeErrorTags,
   reviewPriorityScore
@@ -28,6 +29,10 @@ describe("mastery rules", () => {
     expect(nextReviewDueForMastery("partially_mastered", base)).toBe("2026-05-26T00:00:00.000Z");
     expect(nextReviewDueForMastery("not_mastered", base)).toBe("2026-05-24T00:00:00.000Z");
   });
+
+  it("starts captured mistakes in analysis regardless of OCR confidence", () => {
+    expect(initialMistakeStatus()).toBe("pending_analysis");
+  });
 });
 
 describe("error tag rules", () => {
@@ -39,7 +44,19 @@ describe("error tag rules", () => {
 
     expect(result).toEqual({
       main: "方法性错误",
-      secondary: ["审题性错误", "过程性错误"]
+      secondary: ["看错求什么", "过程性错误"]
+    });
+  });
+
+  it("normalizes redundant freeform secondary tags", () => {
+    const result = normalizeErrorTags({
+      main: "知识性错误",
+      secondary: ["审题不清", "概念混淆", "看错题意"]
+    });
+
+    expect(result).toEqual({
+      main: "知识性错误",
+      secondary: ["看错求什么"]
     });
   });
 });

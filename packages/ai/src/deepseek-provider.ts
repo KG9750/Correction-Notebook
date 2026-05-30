@@ -42,7 +42,7 @@ export class DeepSeekProvider implements LLMProvider {
   constructor(options: DeepSeekProviderOptions = {}) {
     this.apiKey = options.apiKey ?? process.env.DEEPSEEK_API_KEY ?? "";
     this.baseUrl = options.baseUrl ?? process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com/v1/chat/completions";
-    this.model = options.model ?? process.env.DEEPSEEK_MODEL ?? "deepseek-chat";
+    this.model = options.model ?? "deepseek-v4-pro";
     this.fetchImpl = options.fetchImpl ?? fetchWithProxy(fetch);
   }
 
@@ -65,7 +65,7 @@ export class DeepSeekProvider implements LLMProvider {
 
 {
   "main_error_type": "从以下选一个：知识性错误 / 审题性错误 / 方法性错误 / 过程性错误 / 表达性错误",
-  "secondary_error_types": ["副标签1", "副标签2"],
+  "secondary_error_types": ["从以下副标签中选 0-2 个，不能和主错因语义重复：概念混淆 / 公式记错 / 定理适用条件不清 / 漏条件 / 看错求什么 / 关键词误解 / 计算错误 / 符号错误 / 移项变号错误 / 答案不完整"],
   "error_summary": "用 2-3 句话总结错误原因，要引述学生具体写了什么、为什么错了",
   "wrong_step_location": "一句话指出错误发生在哪一步",
   "correct_solution_steps": ["步骤1", "步骤2", "步骤3", "步骤4"],
@@ -74,7 +74,8 @@ export class DeepSeekProvider implements LLMProvider {
   "confidence": 0.90
 }`;
 
-    const raw = await this.chat(prompt);
+    const model = input.model ?? this.model;
+    const raw = await this.chat(prompt, model);
     const parsed = this.parseJson<RawAnalysis>(raw);
 
     return {
@@ -90,7 +91,7 @@ export class DeepSeekProvider implements LLMProvider {
       confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0.88,
       needs_human_review: false,
       model_provider: "deepseek",
-      model_name: this.model,
+      model_name: model,
       created_at: nowIso()
     };
   }
@@ -108,27 +109,30 @@ export class DeepSeekProvider implements LLMProvider {
 【难度模式】${input.difficulty_mode}
 【题型分布】same_pattern 同型变数、condition_change 条件变更、trap 易错陷阱、number_change 数字变更、integrated 综合题
 
-请输出严格 JSON 数组（不要带 markdown 代码块标记）：
+请输出严格 JSON 对象（不要带 markdown 代码块标记）：
 
-[
-  {
-    "question_text": "变式题题干",
-    "difficulty": "basic / standard / challenge",
-    "question_type": "same_pattern / condition_change / trap / number_change / integrated",
-    "estimated_time_seconds": 120,
-    "answer": "标准答案",
-    "solution_steps": ["步骤1", "步骤2", "步骤3"],
-    "knowledge_points": ["知识点"],
-    "target_error_type": "针对的错因类型",
-    "why_related_to_original_mistake": "一句话说明这道题与原错题的关联"
-  }
-]
+{
+  "questions": [
+    {
+      "question_text": "变式题题干",
+      "difficulty": "basic / standard / challenge",
+      "question_type": "same_pattern / condition_change / trap / number_change / integrated",
+      "estimated_time_seconds": 120,
+      "answer": "标准答案",
+      "solution_steps": ["步骤1", "步骤2", "步骤3"],
+      "knowledge_points": ["知识点"],
+      "target_error_type": "针对的错因类型",
+      "why_related_to_original_mistake": "一句话说明这道题与原错题的关联"
+    }
+  ]
+}
 
 要求：题目必须和原题同一个知识点，但数字、情境、问法要有变化。`;
 
-    const raw = await this.chat(prompt);
-    const parsed = this.parseJson<RawQuestion[]>(raw);
-    const questions = (Array.isArray(parsed) ? parsed : []).slice(0, input.count);
+    const raw = await this.chat(prompt, input.model);
+    const parsed = this.parseJson<RawQuestion[] | { questions?: RawQuestion[] }>(raw);
+    const parsedQuestions = Array.isArray(parsed) ? parsed : parsed.questions;
+    const questions = (Array.isArray(parsedQuestions) ? parsedQuestions : []).slice(0, input.count);
 
     return questions.map((q) => ({
       id: createId("gq"),
@@ -170,7 +174,7 @@ export class DeepSeekProvider implements LLMProvider {
   "error_type_if_wrong": "如果错误，标注错因类型，否则null"
 }`;
 
-    const raw = await this.chat(prompt);
+    const raw = await this.chat(prompt, input.model);
     const parsed = this.parseJson<RawGrade>(raw);
 
     return {
@@ -195,7 +199,7 @@ export class DeepSeekProvider implements LLMProvider {
   "reason": "简述验证结果"
 }`;
 
-    const raw = await this.chat(prompt);
+    const raw = await this.chat(prompt, input.model);
     const parsed = this.parseJson<VerifyMathOutput>(raw);
 
     return {
@@ -204,17 +208,18 @@ export class DeepSeekProvider implements LLMProvider {
     };
   }
 
-  private async chat(userPrompt: string): Promise<string> {
+  private async chat(userPrompt: string, model = this.model): Promise<string> {
     if (!this.isConfigured()) {
       throw new Error("DeepSeek API not configured. Set DEEPSEEK_API_KEY.");
     }
 
     const body = JSON.stringify({
-      model: this.model,
+      model,
       messages: [
         { role: "system", content: SYSTEM_MATH_TUTOR },
         { role: "user", content: userPrompt }
       ],
+      response_format: { type: "json_object" },
       temperature: 0.4,
       max_tokens: 4096
     });

@@ -4,6 +4,7 @@ import { gradeOptions, primaryErrorTypes, stageOptions } from "./taxonomy.js";
 export const StageSchema = z.enum(stageOptions);
 export const GradeSchema = z.enum(gradeOptions);
 export const PrimaryErrorTypeSchema = z.enum(primaryErrorTypes);
+export const DeepSeekModelSchema = z.enum(["deepseek-v4-pro", "deepseek-v4-flash"]);
 
 export const MasteryStatusSchema = z.enum([
   "pending_analysis",
@@ -145,7 +146,12 @@ export const OcrResultSchema = z.object({
 
 export const GeneratePracticeRequestSchema = z.object({
   count: z.union([z.literal(3), z.literal(5)]).default(3),
-  difficulty_mode: z.enum(["adaptive", "basic", "standard", "challenge"]).default("adaptive")
+  difficulty_mode: z.enum(["adaptive", "basic", "standard", "challenge"]).default("adaptive"),
+  model: DeepSeekModelSchema.optional()
+});
+
+export const AnalyzeMistakeRequestSchema = z.object({
+  model: DeepSeekModelSchema.optional()
 });
 
 export const PracticeAttemptRequestSchema = z.object({
@@ -182,6 +188,8 @@ export type CreateMistakeRequest = z.infer<typeof CreateMistakeRequestSchema>;
 export type OcrRequest = z.infer<typeof OcrRequestSchema>;
 export type OcrResult = z.infer<typeof OcrResultSchema>;
 export type GeneratePracticeRequest = z.infer<typeof GeneratePracticeRequestSchema>;
+export type AnalyzeMistakeRequest = z.infer<typeof AnalyzeMistakeRequestSchema>;
 export type PracticeAttemptRequest = z.infer<typeof PracticeAttemptRequestSchema>;
 export type CreateTestPaperRequest = z.infer<typeof CreateTestPaperRequestSchema>;
 export type MasteryStatus = z.infer<typeof MasteryStatusSchema>;
+export type DeepSeekModel = z.infer<typeof DeepSeekModelSchema>;

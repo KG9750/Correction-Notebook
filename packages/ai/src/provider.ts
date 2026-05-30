@@ -1,5 +1,6 @@
 import type {
   AIAnalysis,
+  DeepSeekModel,
   GeneratedQuestion,
   Mistake,
   PracticeAttempt
@@ -11,22 +12,26 @@ export type AnalyzeMistakeInput = {
     stage?: string;
   };
   mistake: Mistake;
+  model?: DeepSeekModel;
 };
 
 export type GeneratePracticeInput = {
   mistake: Mistake;
   count: 3 | 5;
   difficulty_mode: "adaptive" | "basic" | "standard" | "challenge";
+  model?: DeepSeekModel;
 };
 
 export type GradeAnswerInput = {
   question: GeneratedQuestion;
   answer_text: string;
   manual_is_correct?: boolean;
+  model?: DeepSeekModel;
 };
 
 export type VerifyMathInput = {
   question: Omit<GeneratedQuestion, "verification_status">;
+  model?: DeepSeekModel;
 };
 
 export type VerifyMathOutput = {

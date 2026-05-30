@@ -19,32 +19,34 @@ npm run dev:api
 npm run dev:mobile
 ```
 
-## Baidu OCR
+## OCR
 
-The iPad/Web client never calls Baidu directly. It sends image Base64 to the local API at `/api/v1/ocr`; the API keeps Baidu credentials server-side.
+The iPad/Web client never calls OCR vendors directly. It sends image Base64 to the local API at `/api/v1/ocr`; the API keeps vendor credentials server-side.
 
-Set these environment variables before starting the API:
+The current default backend OCR provider is Google Cloud Vision document text detection. Set this environment variable before starting the API:
 
 ```bash
-export BAIDU_OCR_API_KEY="your-baidu-api-key"
-export BAIDU_OCR_SECRET_KEY="your-baidu-secret-key"
+export GOOGLE_CLOUD_VISION_API_KEY="your-google-vision-api-key"
 npm run dev:api
 ```
-
-By default the API uses Baidu's formula OCR endpoint because this app primarily handles math mistakes:
-
-```text
-https://aip.baidubce.com/rest/2.0/ocr/v1/formula
-```
-
-This endpoint can return LaTeX formulas. Baidu's current docs mark the formula endpoint as stopped-updating and pending migration, so the endpoint remains configurable.
 
 Optional override:
 
 ```bash
-export BAIDU_OCR_ENDPOINT="https://aip.baidubce.com/rest/2.0/ocr/v1/accurate_basic"
+export GOOGLE_VISION_ENDPOINT="https://vision.googleapis.com/v1/images:annotate"
 ```
 
-If Baidu OCR is not configured or the request fails, the mobile app falls back to local/native OCR behavior so the capture flow remains usable.
+If backend OCR is not configured or the request fails, the mobile app falls back to iOS native Vision OCR when available, then to deterministic editable sample text so the capture flow remains usable during local development.
 
-The API intentionally works without real DeepSeek or Volcengine keys. Real providers should be added behind the `LLMProvider` interface and must keep API keys on the backend only.
+Baidu OCR client code remains in `services/api/src/ocr/baidu.ts` for future provider switching, but it is not the API default.
+
+## AI Provider
+
+The API intentionally works in tests without real DeepSeek or Volcengine keys. Real provider keys must stay on the backend only.
+
+Set DeepSeek before running the API in production-like local development:
+
+```bash
+export DEEPSEEK_API_KEY="your-deepseek-api-key"
+npm run dev:api
+```
