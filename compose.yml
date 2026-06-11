@@ -1,0 +1,21 @@
+services:
+  correction-notebook-api:
+    container_name: correction-notebook-api
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    env_file:
+      - services/api/.env
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 8787
+      HTTPS_PROXY: ${DOCKER_HTTPS_PROXY:-http://host.docker.internal:7897}
+      HTTP_PROXY: ${DOCKER_HTTP_PROXY:-http://host.docker.internal:7897}
+      https_proxy: ${DOCKER_HTTPS_PROXY:-http://host.docker.internal:7897}
+      http_proxy: ${DOCKER_HTTP_PROXY:-http://host.docker.internal:7897}
+    ports:
+      - "8787:8787"
+    restart: unless-stopped
+    volumes:
+      - "/Users/leo/Library/Mobile Documents/com~apple~CloudDocs/Personal/M3U Codex Workspace/Zan/latex-exams:/Users/leo/Library/Mobile Documents/com~apple~CloudDocs/Personal/M3U Codex Workspace/Zan/latex-exams"

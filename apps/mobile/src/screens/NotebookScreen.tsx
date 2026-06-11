@@ -1,8 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
-import type { GeneratedQuestion, Mistake, PracticeAttempt } from "@correction-notebook/shared";
+import { isValidChoiceQuestion, type GeneratedQuestion, type Mistake, type PracticeAttempt } from "@correction-notebook/shared";
 import { useEffect, useState } from "react";
 import { Image, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from "react-native";
 import type { ImageSize } from "../crop/rect";
+import { usePracticeSession } from "../hooks/usePracticeSession";
 import type { AppSettings, NotebookState } from "../types";
 import { groupMistakesForArchive, IconButton, MistakeRow, Panel, SecondaryButton, TagRow } from "../ui/components";
 import { palette, styles } from "../ui/styles";
@@ -17,9 +18,12 @@ export function NotebookScreen({
   onUpdateMistake,
   onDeleteMistake,
   onConfirmMastered,
+  analysisRefreshStatus,
+  analysisRefreshError,
   practiceGenerationStatus,
   practiceGenerationError,
   deepseekModel,
+  onRefreshAnalysis,
   onRefreshPractice
 }: {
   state: NotebookState;
@@ -34,9 +38,12 @@ export function NotebookScreen({
   ) => void;
   onDeleteMistake: (id: string) => void;
   onConfirmMastered: (id: string) => void;
+  analysisRefreshStatus: "generating" | "failed" | undefined;
+  analysisRefreshError: string | undefined;
   practiceGenerationStatus: "generating" | "failed" | undefined;
   practiceGenerationError: string | undefined;
   deepseekModel: AppSettings["deepseekModel"];
+  onRefreshAnalysis: (mistake: Mistake) => void;
   onRefreshPractice: (mistake: Mistake) => void;
 }) {
   const { width } = useWindowDimensions();
@@ -50,8 +57,35 @@ export function NotebookScreen({
   const [editSecondaryErrorTypes, setEditSecondaryErrorTypes] = useState(selectedMistake.secondary_error_types.join("、"));
   const analysis = state.analyses.find((item) => item.mistake_id === selectedMistake.id);
   const questions = state.generatedQuestions.filter((question) => question.mistake_id === selectedMistake.id);
-  const visibleQuestions = questions.slice(0, state.settings.practiceCount);
-  const practiceCompletion = getPracticeCompletion(visibleQuestions, state.attempts);
+  const visibleQuestions = questions.filter(isChoicePracticeQuestion).slice(0, state.settings.practiceCount);
+  const visibleQuestionSignature = visibleQuestions.map((question) => [
+    question.id,
+    question.question_text,
+    question.answer,
+    question.choice_answer_type,
+    ...(question.choice_options ?? []).map((option) => `${option.label}:${option.text}`)
+  ].join("|")).join("||");
+  const {
+    practiceAnswers,
+    practiceResults,
+    isBatchGrading,
+    latestPracticeAttemptByQuestion,
+    hasRequiredPracticeQuestions,
+    practiceCompletion,
+    batchPracticeSummary,
+    answeredPracticeCount,
+    allPracticeAnswered,
+    updatePracticeAnswer,
+    gradeAllPractice
+  } = usePracticeSession({
+    selectedMistakeId: selectedMistake.id,
+    visibleQuestions,
+    visibleQuestionSignature,
+    attempts: state.attempts,
+    requiredCount: state.settings.practiceCount,
+    practiceGenerationStatus,
+    onAttempt
+  });
   const modelLabel = deepseekModel === "deepseek-v4-flash" ? "DeepSeek V4 Flash" : "DeepSeek V4 Pro";
   const detailImageAspect = detailImageSize ? detailImageSize.width / detailImageSize.height : undefined;
   const detailImageHeight = detailImageAspect ? Math.max(150, Math.min(360, 340 / detailImageAspect)) : undefined;
@@ -64,7 +98,7 @@ export function NotebookScreen({
       (imageWidth, imageHeight) => setDetailImageSize({ width: imageWidth, height: imageHeight }),
       () => setDetailImageSize(undefined)
     );
-  }, [selectedMistake.cropped_image_uri]);
+  }, [selectedMistake.id, selectedMistake.cropped_image_uri]);
 
   const beginEdit = () => {
     setEditQuestion(selectedMistake.normalized_question_text || selectedMistake.ocr_text);
@@ -166,7 +200,32 @@ export function NotebookScreen({
             ) : null}
           </View>
         </View>
-        <Panel title="错因讲解">
+        <Panel
+          title="错因讲解"
+          action={
+            <IconButton
+              icon={analysisRefreshStatus === "generating" ? "sync-outline" : "refresh-outline"}
+              label="刷新错因讲解"
+              spinning={analysisRefreshStatus === "generating"}
+              disabled={analysisRefreshStatus === "generating"}
+              onPress={() => {
+                if (analysisRefreshStatus !== "generating") onRefreshAnalysis(selectedMistake);
+              }}
+            />
+          }
+        >
+          {analysisRefreshStatus === "generating" ? (
+            <View style={styles.practiceStatusBox}>
+              <Ionicons name="sync-outline" size={18} color={palette.teal} />
+              <Text style={styles.bodyText}>{modelLabel} 正在刷新错因讲解。</Text>
+            </View>
+          ) : null}
+          {analysisRefreshStatus === "failed" ? (
+            <View style={styles.practiceStatusBox}>
+              <Ionicons name="alert-circle-outline" size={18} color={palette.primary} />
+              <Text style={styles.bodyText}>错因讲解刷新失败。{analysisRefreshError ? `原因：${analysisRefreshError}` : "请稍后重试或检查 API 状态。"}</Text>
+            </View>
+          ) : null}
           {analysis ? (
             <View>
               <Text style={styles.explainLead}>{analysis.student_friendly_explanation}</Text>
@@ -184,9 +243,11 @@ export function NotebookScreen({
         <Panel
           title={`${state.settings.practiceCount} 道变式练习`}
           action={
-            <SecondaryButton
-              icon="refresh-outline"
-              label={practiceGenerationStatus === "generating" ? "生成中" : "刷新生成"}
+            <IconButton
+              icon={practiceGenerationStatus === "generating" ? "sync-outline" : "refresh-outline"}
+              label={practiceGenerationStatus === "generating" ? "正在生成变式练习" : "刷新变式练习"}
+              spinning={practiceGenerationStatus === "generating"}
+              disabled={practiceGenerationStatus === "generating"}
               onPress={() => {
                 if (practiceGenerationStatus !== "generating") onRefreshPractice(selectedMistake);
               }}
@@ -202,28 +263,47 @@ export function NotebookScreen({
           {visibleQuestions.length > 0 ? (
             <>
               {visibleQuestions.map((question) => (
-                <PracticeQuestion key={question.id} question={question} onAttempt={onAttempt} />
+                <PracticeQuestion
+                  key={question.id}
+                  question={question}
+                  answer={practiceAnswers[question.id] ?? ""}
+                  result={practiceResults[question.id] ?? latestPracticeAttemptByQuestion.get(question.id)}
+                  onChangeAnswer={(answer) => updatePracticeAnswer(question.id, answer)}
+                />
               ))}
-              {practiceCompletion.allAnswered ? (
-                <View style={practiceCompletion.allCorrect ? styles.masteryConfirmBox : styles.masteryWaitingBox}>
+              <View style={styles.practiceBatchActions}>
+                <Text style={[
+                  styles.practiceReason,
+                  batchPracticeSummary?.tone === "correct"
+                    ? styles.correctText
+                    : batchPracticeSummary?.tone === "wrong"
+                      ? styles.wrongText
+                      : null
+                ]}>
+                  {batchPracticeSummary?.text ?? `已完成 ${answeredPracticeCount}/${visibleQuestions.length} 题。`}
+                </Text>
+                <SecondaryButton
+                  icon={isBatchGrading ? "sync-outline" : "checkmark-circle-outline"}
+                  label={isBatchGrading ? "判卷中" : "判断对错"}
+                  disabled={!allPracticeAnswered || isBatchGrading}
+                  onPress={gradeAllPractice}
+                />
+              </View>
+              {practiceCompletion.allAnswered && !practiceCompletion.allCorrect ? (
+                <View style={styles.masteryWaitingBox}>
                   <Ionicons
-                    name={practiceCompletion.allCorrect ? "ribbon-outline" : "refresh-circle-outline"}
+                    name="refresh-circle-outline"
                     size={20}
-                    color={practiceCompletion.allCorrect ? palette.teal : palette.primary}
+                    color={palette.primary}
                   />
                   <View style={styles.masteryConfirmText}>
                     <Text style={styles.practiceTitle}>
-                      {practiceCompletion.allCorrect ? "已批改练习全部正确" : "练习还未全部批改正确"}
+                      练习还未全部批改正确
                     </Text>
                     <Text style={styles.practiceReason}>
-                      {practiceCompletion.allCorrect
-                        ? "确认后，这道错题会移动到错题集，并按知识点大类归档。"
-                        : "DeepSeek V4 批改达到掌握标准后，才可以确认掌握。"}
+                      全部练习达到掌握标准后，才可以确认掌握。
                     </Text>
                   </View>
-                  {practiceCompletion.allCorrect ? (
-                    <SecondaryButton icon="checkmark-done-outline" label="确认已掌握" onPress={() => onConfirmMastered(selectedMistake.id)} />
-                  ) : null}
                 </View>
               ) : null}
             </>
@@ -255,20 +335,23 @@ export function NotebookScreen({
             />
             <View style={styles.masteryConfirmText}>
               <Text style={styles.practiceTitle}>
-                {practiceCompletion.allCorrect ? "可以存档到错题集" : "完成 DeepSeek 批改后再存档"}
+                {practiceCompletion.allCorrect ? "可以存档到错题集" : "完成判卷后再存档"}
               </Text>
               <Text style={styles.practiceReason}>
                 {practiceCompletion.allCorrect
                   ? "存档后仍可在错题集查看；后续复测失败时再回到错题本。"
-                  : `需要 ${state.settings.practiceCount} 道变式练习全部由 DeepSeek V4 判定正确。`}
+                  : hasRequiredPracticeQuestions
+                    ? `需要 ${state.settings.practiceCount} 道变式练习全部判定正确。`
+                    : `当前只有 ${visibleQuestions.length}/${state.settings.practiceCount} 道有效变式练习，请刷新生成。`}
               </Text>
             </View>
-            <SecondaryButton
-              icon="archive-outline"
-              label="存档到错题集"
-              disabled={!practiceCompletion.allCorrect}
-              onPress={() => onConfirmMastered(selectedMistake.id)}
-            />
+            {practiceCompletion.allCorrect ? (
+              <SecondaryButton
+                icon="archive-outline"
+                label="存档到错题集"
+                onPress={() => onConfirmMastered(selectedMistake.id)}
+              />
+            ) : null}
           </View>
         </Panel>
       </ScrollView>
@@ -348,44 +431,83 @@ function normalizePrimaryErrorType(value: string): Mistake["main_error_type"] {
     : "方法性错误";
 }
 
-function PracticeQuestion({ question, onAttempt }: { question: GeneratedQuestion; onAttempt: (question: GeneratedQuestion, answer: string) => Promise<PracticeAttempt> }) {
-  const [answer, setAnswer] = useState("");
-  const [result, setResult] = useState<PracticeAttempt | undefined>();
-  const [isGrading, setIsGrading] = useState(false);
-  const judgeAnswer = () => {
-    if (isGrading) return;
-    setIsGrading(true);
-    setResult(undefined);
-    onAttempt(question, answer || "未填写")
-      .then(setResult)
-      .finally(() => setIsGrading(false));
+function PracticeQuestion({
+  question,
+  answer,
+  result,
+  onChangeAnswer
+}: {
+  question: GeneratedQuestion;
+  answer: string;
+  result: PracticeAttempt | undefined;
+  onChangeAnswer: (answer: string) => void;
+}) {
+  const choiceOptions = question.choice_options ?? [];
+  const isChoiceQuestion = choiceOptions.length >= 4 && (question.choice_answer_type === "single" || question.choice_answer_type === "multiple");
+  const selectedLabels = answer.split(",").map((label) => label.trim()).filter(Boolean);
+  const toggleChoice = (label: string) => {
+    if (question.choice_answer_type !== "multiple") {
+      onChangeAnswer(label);
+      return;
+    }
+    const selected = new Set(selectedLabels);
+    if (selected.has(label)) {
+      selected.delete(label);
+    } else {
+      selected.add(label);
+    }
+    const ordered = choiceOptions.map((option) => option.label).filter((optionLabel) => selected.has(optionLabel));
+    onChangeAnswer(ordered.join(","));
   };
 
   return (
     <View style={styles.practiceBox}>
+      {isChoiceQuestion ? (
+        <Text style={[
+          styles.choiceTypePill,
+          question.choice_answer_type === "multiple" ? styles.choiceTypePillMultiple : styles.choiceTypePillSingle
+        ]}>
+          {question.choice_answer_type === "multiple" ? "多选题" : "单选题"}
+        </Text>
+      ) : null}
       <Text style={styles.practiceTitle}>{question.question_text}</Text>
       <Text style={styles.practiceReason}>{question.why_related_to_original_mistake}</Text>
-      <View style={styles.answerInputRow}>
-        <TextInput
-          value={answer}
-          onChangeText={(value) => {
-            setAnswer(value);
-            setResult(undefined);
-          }}
-          placeholder="输入答案后交给 DeepSeek V4 批改"
-          returnKeyType="done"
-          onSubmitEditing={judgeAnswer}
-          style={[styles.input, styles.answerInput]}
-        />
-        <Pressable accessibilityRole="button" accessibilityLabel="提交答案批改" style={styles.answerJudgeButton} onPress={judgeAnswer}>
-          <Ionicons name={isGrading ? "sync-outline" : "checkmark-circle-outline"} size={22} color={palette.canvas} />
-        </Pressable>
-      </View>
-      {isGrading ? <Text style={styles.bodyText}>DeepSeek V4 正在批改…</Text> : null}
+      {isChoiceQuestion ? (
+        <>
+          <View style={styles.choiceOptions}>
+            {choiceOptions.map((option) => {
+              const selected = selectedLabels.includes(option.label);
+              return (
+                <Pressable
+                  key={option.label}
+                  accessibilityRole="button"
+                  accessibilityLabel={`选择 ${option.label}`}
+                  style={[styles.choiceOption, selected && styles.choiceOptionSelected]}
+                  onPress={() => toggleChoice(option.label)}
+                >
+                  <Text style={[styles.choiceOptionLabel, selected && styles.choiceOptionLabelSelected]}>{option.label}</Text>
+                  <Text style={styles.choiceOptionText}>{option.text}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <Text style={styles.practiceReason}>已选：{answer || "未选择"}</Text>
+        </>
+      ) : (
+        <View style={styles.answerInputRow}>
+          <TextInput
+            value={answer}
+            onChangeText={onChangeAnswer}
+            placeholder="输入答案"
+            returnKeyType="done"
+            style={[styles.input, styles.answerInput]}
+          />
+        </View>
+      )}
       {result ? (
         <View>
           <Text style={result.grading_status === "ungraded" ? styles.wrongText : result.is_correct ? styles.correctText : styles.wrongText}>
-            {result.grading_status === "ungraded" ? "暂未批改" : result.is_correct ? "DeepSeek V4 判定正确" : "DeepSeek V4 判定错误，可修改后重试"}
+            {result.grading_status === "ungraded" ? "暂未批改" : result.is_correct ? "判定正确" : "判定错误，可修改后重试"}
           </Text>
           <Text style={styles.practiceReason}>{result.feedback}</Text>
           <Text style={styles.practiceReason}>标准答案：{question.answer}</Text>
@@ -396,16 +518,6 @@ function PracticeQuestion({ question, onAttempt }: { question: GeneratedQuestion
   );
 }
 
-function getPracticeCompletion(questions: GeneratedQuestion[], attempts: NotebookState["attempts"]) {
-  if (questions.length === 0) return { allAnswered: false, allCorrect: false };
-
-  const latestAttemptByQuestion = new Map<string, NotebookState["attempts"][number]>();
-  attempts.forEach((attempt) => {
-    latestAttemptByQuestion.set(attempt.generated_question_id, attempt);
-  });
-  const latestAttempts = questions.map((question) => latestAttemptByQuestion.get(question.id));
-  const allAnswered = latestAttempts.every((attempt) => attempt?.grading_status === "graded");
-  const allCorrect = allAnswered && latestAttempts.every((attempt) => attempt?.is_correct === true);
-
-  return { allAnswered, allCorrect };
+function isChoicePracticeQuestion(question: GeneratedQuestion): boolean {
+  return isValidChoiceQuestion(question);
 }

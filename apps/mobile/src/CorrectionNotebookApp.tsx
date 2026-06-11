@@ -1,33 +1,32 @@
 import { Ionicons } from "@expo/vector-icons";
-import { createId, nowIso, type AIAnalysis, type GeneratedQuestion, type Mistake, type PracticeAttempt } from "@correction-notebook/shared";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createId, nowIso, type GeneratedQuestion, type PracticeAttempt } from "@correction-notebook/shared";
+import { useEffect, useMemo, useState } from "react";
 import {
   Pressable,
-  SafeAreaView,
   ScrollView,
   Text,
   useWindowDimensions,
   View
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { useNotebookBackup } from "./hooks/useNotebookBackup";
+import { useTestPaperJob } from "./hooks/useTestPaperJob";
+import { useAiEnrichment } from "./hooks/useAiEnrichment";
 import { buildAnswerPaperHtml, buildStudentPaperHtml } from "./print/paperHtml";
 import { printHtml, sharePdf } from "./print/actions";
 import {
   addCapturedMistake,
   confirmMistakeMastered,
   createInitialNotebookState,
-  createPreviewTestPaper,
   deleteMistake,
   getDueReviewMistakes,
   recordPracticeAttempt,
-  recordTestPaper,
-  replaceMistakeAI,
   setSection,
   updateMistake,
   withDefaultSettings
 } from "./notebook-state";
-import { createFreshTestPaper, enrichMistakeWithServerAI, submitPracticeAttempt, type EnrichMistakeResult } from "./api/enrich";
+import { submitPracticeAttempt } from "./api/enrich";
 import { loadArchivedNotebookState, saveArchivedNotebookState } from "./storage/archive";
-import { exportNotebookBackupToICloudDrive, importNotebookBackupFromICloudDrive } from "./storage/icloud-backup";
 import type { AppSection, NotebookState } from "./types";
 import { Metric, MistakeRow, Panel, PrimaryAction, SecondaryButton, Sidebar } from "./ui/components";
 import { palette, styles } from "./ui/styles";
@@ -36,33 +35,25 @@ import { CollectionScreen, EmptyNotebookScreen, NotebookScreen } from "./screens
 import { ReportScreen } from "./screens/ReportScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
 
-function applyEnrichmentResult(state: NotebookState, mistakeId: string, result: EnrichMistakeResult): NotebookState {
-  const analysis: AIAnalysis = {
-    ...result.analysis,
-    id: result.analysis.analysis_id,
-    mistake_id: mistakeId
-  };
-  const questions: GeneratedQuestion[] = result.questions.map((question) => ({
-    ...question,
-    mistake_id: mistakeId
-  }));
-  return replaceMistakeAI(state, mistakeId, analysis, questions);
-}
-
 export function CorrectionNotebookApp() {
   const [state, setState] = useState<NotebookState>(() => createInitialNotebookState());
   const [archiveLoaded, setArchiveLoaded] = useState(false);
-  const [practiceGenerationStatus, setPracticeGenerationStatus] = useState<Record<string, "generating" | "failed">>({});
-  const [practiceGenerationError, setPracticeGenerationError] = useState<Record<string, string>>({});
-  const [paperGenerationStatus, setPaperGenerationStatus] = useState<"idle" | "generating" | "failed">("idle");
-  const [paperGenerationError, setPaperGenerationError] = useState("");
-  const [backupStatus, setBackupStatus] = useState("");
-  const enrichmentInFlightRef = useRef<Set<string>>(new Set());
   const { width } = useWindowDimensions();
   const activeMistakes = state.mistakes.filter((mistake) => !state.archivedMistakeIds.includes(mistake.id));
   const archivedMistakes = state.mistakes.filter((mistake) => state.archivedMistakeIds.includes(mistake.id));
   const selectedMistake = activeMistakes.find((mistake) => mistake.id === state.selectedMistakeId) ?? activeMistakes[0];
   const isCompact = width < 760;
+  const { backupStatus, exportBackup, importBackup } = useNotebookBackup(state, setState);
+  const { createPaper, paperGenerationStatus, paperGenerationError } = useTestPaperJob(state, setState);
+  const {
+    analysisRefreshStatus,
+    analysisRefreshError,
+    practiceGenerationStatus,
+    practiceGenerationError,
+    refreshAnalysis,
+    refreshPractice,
+    clearMistakeAiStatus
+  } = useAiEnrichment(state, setState);
 
   const goTo = (section: AppSection) => setState((current) => setSection(current, section));
   const selectMistake = (mistakeId: string) =>
@@ -72,13 +63,13 @@ export function CorrectionNotebookApp() {
   };
   const gradePractice = async (question: GeneratedQuestion, answerText: string): Promise<PracticeAttempt> => {
     try {
-      const result = await submitPracticeAttempt({
-        studentId: state.profile.id,
-        questionId: question.id,
-        answerText,
-        practiceTotal: state.settings.practiceCount,
-        model: state.settings.deepseekModel
-      });
+	      const result = await submitPracticeAttempt({
+	        studentId: state.profile.id,
+	        question,
+	        answerText,
+	        practiceTotal: state.settings.practiceCount,
+	        model: state.settings.deepseekModel
+	      });
       setState((current) => recordPracticeAttempt(current, result.attempt, current.settings.practiceCount));
       return result.attempt;
     } catch (error) {
@@ -92,7 +83,7 @@ export function CorrectionNotebookApp() {
         is_correct: null,
         error_type_if_wrong: null,
         graded_by: null,
-        feedback: "DeepSeek V4 暂未完成批改。你可以先看标准答案和解法，稍后重试。",
+        feedback: "暂未完成批改。你可以先看标准答案和解法，稍后重试。",
         grading_error: error instanceof Error ? error.message : "practice_grading_failed",
         created_at: nowIso()
       };
@@ -100,88 +91,6 @@ export function CorrectionNotebookApp() {
       return attempt;
     }
   };
-  const createPaper = () => {
-    if (paperGenerationStatus === "generating") return;
-    setState((current) => ({ ...current, activeSection: "paper" }));
-    setPaperGenerationStatus("generating");
-    setPaperGenerationError("");
-    createFreshTestPaper({
-      studentId: state.profile.id,
-      questionCount: 10,
-      difficultyMode: state.settings.practiceDifficulty,
-      includeAnswerPdf: true
-    }).then((result) => {
-      setState((current) => recordTestPaper(current, result.paper));
-      setPaperGenerationStatus("idle");
-    }).catch((error: unknown) => {
-      setState((current) => {
-        const preview = createPreviewTestPaper(current);
-        return preview ? recordTestPaper(current, preview) : current;
-      });
-      setPaperGenerationStatus("failed");
-      const reason = error instanceof Error ? error.message : "复测卷生成失败。";
-      setPaperGenerationError(`${reason}。如页面出现非正式预览，可先用于检查题面；正式复测卷需等待 DeepSeek V4 和 Claude Code LaTeX 任务恢复。`);
-    });
-  };
-  const exportBackup = () => {
-    setBackupStatus("正在导出备份…");
-    exportNotebookBackupToICloudDrive(state)
-      .then((uri) => setBackupStatus(`备份已写入：${uri}`))
-      .catch((error: unknown) => setBackupStatus(error instanceof Error ? error.message : "备份导出失败。"));
-  };
-  const importBackup = () => {
-    setBackupStatus("正在读取备份…");
-    importNotebookBackupFromICloudDrive()
-      .then((restored) => {
-        if (!restored) {
-          setBackupStatus("未读取到有效备份。");
-          return;
-        }
-        setState(withDefaultSettings(restored));
-        setBackupStatus("备份已恢复。");
-      })
-      .catch((error: unknown) => setBackupStatus(error instanceof Error ? error.message : "备份恢复失败。"));
-  };
-  const refreshPractice = (mistake: Mistake) => {
-    setPracticeGenerationStatus((status) => ({ ...status, [mistake.id]: "generating" }));
-    setPracticeGenerationError((errors) => {
-      const nextErrors = { ...errors };
-      delete nextErrors[mistake.id];
-      return nextErrors;
-    });
-    enrichMistakeWithServerAI({
-      studentId: state.profile.id,
-      grade: state.profile.grade,
-      ocrText: mistake.normalized_question_text || mistake.ocr_text,
-      studentAnswer: mistake.student_answer,
-      imageUri: mistake.cropped_image_uri ?? mistake.original_image_uri,
-      settings: state.settings
-    }).then((result) => {
-      if (result) {
-        setPracticeGenerationStatus((status) => {
-          const nextStatus = { ...status };
-          if (result.questions.length > 0) {
-            delete nextStatus[mistake.id];
-          } else {
-            nextStatus[mistake.id] = "failed";
-          }
-          return nextStatus;
-        });
-        if (result.questions.length === 0) {
-          setPracticeGenerationError((errors) => ({ ...errors, [mistake.id]: result.practiceError ?? "模型没有返回可用题目。" }));
-        }
-        setState((prev) => applyEnrichmentResult(prev, mistake.id, result));
-      } else {
-        setPracticeGenerationStatus((status) => ({ ...status, [mistake.id]: "failed" }));
-        setPracticeGenerationError((errors) => ({ ...errors, [mistake.id]: "服务端没有返回生成结果。" }));
-      }
-    }).catch((err: unknown) => {
-      setPracticeGenerationStatus((status) => ({ ...status, [mistake.id]: "failed" }));
-      setPracticeGenerationError((errors) => ({ ...errors, [mistake.id]: err instanceof Error ? err.message : "刷新生成失败。" }));
-      console.error("[practice] Refresh practice failed:", err);
-    });
-  };
-
   useEffect(() => {
     loadArchivedNotebookState().then((archived) => {
       if (archived) {
@@ -190,64 +99,6 @@ export function CorrectionNotebookApp() {
       setArchiveLoaded(true);
     });
   }, []);
-
-  useEffect(() => {
-    const mistakeId = state.enrichingMistakeId;
-    if (!mistakeId || enrichmentInFlightRef.current.has(mistakeId)) return;
-
-    const mistake = state.mistakes.find((item) => item.id === mistakeId);
-    if (!mistake) {
-      setState((current) => current.enrichingMistakeId === mistakeId ? { ...current, enrichingMistakeId: null } : current);
-      return;
-    }
-
-    enrichmentInFlightRef.current.add(mistakeId);
-    setPracticeGenerationStatus((status) => ({ ...status, [mistakeId]: "generating" }));
-    setPracticeGenerationError((errors) => {
-      const nextErrors = { ...errors };
-      delete nextErrors[mistakeId];
-      return nextErrors;
-    });
-
-    enrichMistakeWithServerAI({
-      studentId: state.profile.id,
-      grade: state.profile.grade,
-      ocrText: mistake.normalized_question_text || mistake.ocr_text,
-      studentAnswer: mistake.student_answer,
-      imageUri: mistake.cropped_image_uri ?? mistake.original_image_uri,
-      settings: state.settings
-    }).then((result) => {
-      if (result) {
-        setPracticeGenerationStatus((status) => {
-          const nextStatus = { ...status };
-          if (result.questions.length > 0) {
-            delete nextStatus[mistakeId];
-          } else {
-            nextStatus[mistakeId] = "failed";
-          }
-          return nextStatus;
-        });
-        if (result.questions.length === 0) {
-          setPracticeGenerationError((errors) => ({ ...errors, [mistakeId]: result.practiceError ?? "模型没有返回可用题目。" }));
-        }
-        setState((prev) => {
-          const cleared = prev.enrichingMistakeId === mistakeId ? { ...prev, enrichingMistakeId: null } : prev;
-          return applyEnrichmentResult(cleared, mistakeId, result);
-        });
-      } else {
-        setPracticeGenerationStatus((status) => ({ ...status, [mistakeId]: "failed" }));
-        setPracticeGenerationError((errors) => ({ ...errors, [mistakeId]: "服务端没有返回生成结果。" }));
-        setState((prev) => prev.enrichingMistakeId === mistakeId ? { ...prev, enrichingMistakeId: null } : prev);
-      }
-    }).catch((err: unknown) => {
-      setPracticeGenerationStatus((status) => ({ ...status, [mistakeId]: "failed" }));
-      setPracticeGenerationError((errors) => ({ ...errors, [mistakeId]: err instanceof Error ? err.message : "生成变式练习失败。" }));
-      setState((prev) => prev.enrichingMistakeId === mistakeId ? { ...prev, enrichingMistakeId: null } : prev);
-      console.error("[enrich] Server AI enrichment failed:", err);
-    }).finally(() => {
-      enrichmentInFlightRef.current.delete(mistakeId);
-    });
-  }, [state.enrichingMistakeId, state.mistakes, state.profile.grade, state.profile.id, state.settings]);
 
   useEffect(() => {
     if (!archiveLoaded) return;
@@ -282,18 +133,17 @@ export function CorrectionNotebookApp() {
                 onSelectMistake={selectMistake}
                 onAttempt={gradePractice}
                 onUpdateMistake={(mistakeId, patch) => setState((current) => updateMistake(current, mistakeId, patch))}
-                onDeleteMistake={(mistakeId) => {
-                  setState((current) => deleteMistake(current, mistakeId));
-                  setPracticeGenerationError((errors) => {
-                    const nextErrors = { ...errors };
-                    delete nextErrors[mistakeId];
-                    return nextErrors;
-                  });
-                }}
+	                onDeleteMistake={(mistakeId) => {
+	                  setState((current) => deleteMistake(current, mistakeId));
+	                  clearMistakeAiStatus(mistakeId);
+	                }}
                 onConfirmMastered={confirmMastered}
+                analysisRefreshStatus={analysisRefreshStatus[selectedMistake.id]}
+                analysisRefreshError={analysisRefreshError[selectedMistake.id]}
                 practiceGenerationStatus={practiceGenerationStatus[selectedMistake.id]}
                 practiceGenerationError={practiceGenerationError[selectedMistake.id]}
                 deepseekModel={state.settings.deepseekModel}
+                onRefreshAnalysis={refreshAnalysis}
                 onRefreshPractice={refreshPractice}
               />
             ) : (
@@ -391,6 +241,7 @@ function PaperScreen({
   const questions = latestPaper?.questions.length ? latestPaper.questions : state.generatedQuestions.slice(0, latestPaper?.question_count ?? 3);
   const studentHtml = latestPaper ? buildStudentPaperHtml(latestPaper, questions) : "";
   const answerHtml = latestPaper ? buildAnswerPaperHtml(latestPaper, questions) : "";
+  const latexJob = latestPaper?.latex_job;
 
   return (
     <ScrollView contentContainerStyle={styles.screen}>
@@ -423,12 +274,26 @@ function PaperScreen({
       </Panel>
       {latestPaper ? (
         <Panel title="PDF 与打印">
-          <Text style={styles.bodyText}>正式复测卷任务：{latestPaper.latex_job?.status ?? "queued"}。输出目录：{latestPaper.latex_job?.expected_outputs.student_pdf_path ?? latestPaper.student_pdf_url}</Text>
+          {latexJob ? (
+            <View style={styles.jobStatusBox}>
+              <Text style={styles.practiceTitle}>正式复测卷任务：{testPaperStatusLabel(latexJob.status)}</Text>
+              <Text style={styles.bodyText}>{latexJob.progress_message ?? "正在等待任务状态更新。"}</Text>
+              <Text style={styles.practiceReason}>输出目录：{parentDirectory(latexJob.expected_outputs.student_pdf_path)}</Text>
+              <JobFileRow label="任务清单" path={latexJob.manifest_path} done={latexJob.files?.manifest_exists ?? false} />
+              <JobFileRow label="学生卷 PDF" path={latexJob.expected_outputs.student_pdf_path} done={latexJob.files?.student_pdf_exists ?? Boolean(latexJob.output_paths.student_pdf_path)} />
+              <JobFileRow label="答案卷 PDF" path={latexJob.expected_outputs.answer_pdf_path} done={latexJob.files?.answer_pdf_exists ?? Boolean(latexJob.output_paths.answer_pdf_path)} />
+            </View>
+          ) : (
+            <Text style={styles.bodyText}>正式复测卷任务：等待创建。输出目录：{latestPaper.student_pdf_url}</Text>
+          )}
           <Text style={styles.tipText}>
             {latestPaper.student_pdf_url.startsWith("local-preview://")
               ? "这是后端生成失败后的非正式预览，正式学生卷和答案卷仍需 DeepSeek V4 + Claude Code LaTeX 生成。"
               : "下方 HTML/Expo 打印仅作为非正式预览；正式学生卷和答案卷以 Claude Code + LaTeX 输出 PDF 为准。"}
           </Text>
+          {generationError && generationStatus !== "failed" ? (
+            <Text style={styles.wrongText}>任务状态刷新失败：{generationError}</Text>
+          ) : null}
           <View style={styles.formActions}>
             <SecondaryButton icon="print-outline" label="打印学生卷" onPress={() => printHtml(studentHtml)} />
             <SecondaryButton icon="share-outline" label="分享学生 PDF" onPress={() => sharePdf(studentHtml)} />
@@ -448,4 +313,28 @@ function PaperScreen({
       ) : null}
     </ScrollView>
   );
+}
+
+function JobFileRow({ label, path, done }: { label: string; path: string; done: boolean }) {
+  return (
+    <View style={styles.jobFileRow}>
+      <Ionicons name={done ? "checkmark-circle-outline" : "time-outline"} size={18} color={done ? palette.teal : palette.muted} />
+      <View style={styles.jobFileText}>
+        <Text style={styles.practiceTitle}>{label}：{done ? "已生成" : "等待生成"}</Text>
+        <Text style={styles.practiceReason}>{path}</Text>
+      </View>
+    </View>
+  );
+}
+
+function testPaperStatusLabel(status: string): string {
+  if (status === "completed") return "已完成";
+  if (status === "running") return "生成中";
+  if (status === "failed") return "失败";
+  return "排队中";
+}
+
+function parentDirectory(path: string): string {
+  const index = path.lastIndexOf("/");
+  return index > 0 ? path.slice(0, index) : path;
 }

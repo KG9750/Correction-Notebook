@@ -3,6 +3,7 @@ import {
   computeMasteryFromPractice,
   computeMasteryFromGradedAttempts,
   dueReviewMistakes,
+  filterPassedChoiceQuestions,
   filterPassedQuestions,
   hasMasteryConfirmationEvidence,
   initialMistakeStatus,
@@ -194,5 +195,53 @@ describe("generated question safety", () => {
         { ...base, id: "failed", verification_status: "failed" }
       ]).map((item) => item.id)
     ).toEqual(["passed"]);
+  });
+
+  it("keeps only verified choice questions for practice", () => {
+    const base = {
+      id: "gq",
+      mistake_id: "m_1",
+      question_text: "一根绳子剪去 8 米后还剩 17 米，原来长多少米？",
+      choice_answer_type: "single",
+      choice_options: [
+        { label: "A", text: "9 米" },
+        { label: "B", text: "17 米" },
+        { label: "C", text: "25 米" },
+        { label: "D", text: "136 米" }
+      ],
+      difficulty: "basic",
+      question_type: "same_pattern",
+      estimated_time_seconds: 120,
+      answer: "C",
+      solution_steps: ["列 x - 8 = 17。"],
+      knowledge_points: ["一元一次方程"],
+      target_error_type: "等量关系",
+      why_related_to_original_mistake: "仍然检查等量关系",
+      created_at: "2026-05-23T00:00:00.000Z"
+    } satisfies Omit<GeneratedQuestion, "verification_status">;
+
+    expect(
+      filterPassedChoiceQuestions([
+        { ...base, id: "choice", verification_status: "passed" },
+        { ...base, id: "open", choice_answer_type: undefined, choice_options: undefined, answer: "x=25", verification_status: "passed" },
+        { ...base, id: "blank", question_text: "一根绳子剪去 8 米后还剩 17 米，原来长____米。", verification_status: "passed" },
+        { ...base, id: "contradictory", choice_answer_type: "multiple", answer: "A,B,D", solution_steps: ["若 b=-2，则元素为 2,-2,0，三个不同，不符合。", "故正确选项为 A 和 B。"], verification_status: "passed" },
+        {
+          ...base,
+          id: "set_cardinality_wrong_answer",
+          question_text: "已知集合{2, t, t+2}恰有2个元素，则不能取下列哪个值？",
+          choice_options: [
+            { label: "A", text: "0" },
+            { label: "B", text: "2" },
+            { label: "C", text: "4" },
+            { label: "D", text: "6" }
+          ],
+          answer: "B",
+          solution_steps: ["标准答案：B。"],
+          verification_status: "passed"
+        },
+        { ...base, id: "failed", verification_status: "failed" }
+      ]).map((item) => item.id)
+    ).toEqual(["choice"]);
   });
 });

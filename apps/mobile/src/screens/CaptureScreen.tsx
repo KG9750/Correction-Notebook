@@ -5,7 +5,8 @@ import { useState } from "react";
 import { Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { CropOverlay } from "../crop/CropOverlay";
 import { percentRectToPixelCrop, type CropPercentRect, type ImageSize } from "../crop/rect";
-import { recognizeMistakeImage, type OcrResult } from "../ocr/recognize";
+import { insertFillBlank, type TextSelection } from "../ocr/fillBlank";
+import { normalizeOcrText, recognizeMistakeImage, type OcrResult } from "../ocr/recognize";
 import { splitStudentAnswerFromOcr } from "../ocr/splitStudentAnswer";
 import { SecondaryButton } from "../ui/components";
 import { palette, styles } from "../ui/styles";
@@ -23,28 +24,49 @@ export function CaptureScreen({ onCaptured }: { onCaptured: (input: { imageUri?:
   const [studentAnswer, setStudentAnswer] = useState("");
   const [ocrState, setOcrState] = useState<"idle" | "running" | "done" | "failed">("idle");
   const [ocrResult, setOcrResult] = useState<OcrResult | undefined>();
+  const [ocrError, setOcrError] = useState("");
+  const [questionSelection, setQuestionSelection] = useState<TextSelection>({ start: 0, end: 0 });
+
+  const resetOcrFields = () => {
+    setOcrState("idle");
+    setOcrResult(undefined);
+    setOcrError("");
+    setOcrText("");
+    setStudentAnswer("");
+    setQuestionSelection({ start: 0, end: 0 });
+  };
 
   const runOcr = async (uri: string) => {
     setOcrState("running");
     setOcrResult(undefined);
+    setOcrError("");
     setOcrText("");
     setStudentAnswer("");
     try {
       const result = await recognizeMistakeImage(uri);
       const split = splitStudentAnswerFromOcr(result.rawText || result.normalizedText);
-      setOcrText(split.questionText || result.normalizedText);
+      const questionText = split.questionText ? normalizeOcrText(split.questionText) : result.normalizedText;
+      setOcrText(questionText);
+      setQuestionSelection({ start: questionText.length, end: questionText.length });
       setStudentAnswer(split.studentAnswer);
       setOcrResult(result);
       setOcrState("done");
-    } catch {
+    } catch (error) {
       setOcrState("failed");
+      setOcrError(error instanceof Error ? error.message : "OCR 失败。");
       setOcrText("");
     }
   };
 
+  const insertBlankIntoQuestion = () => {
+    const next = insertFillBlank(ocrText, questionSelection);
+    setOcrText(next.text);
+    setQuestionSelection(next.selection);
+  };
+
   const pickFromLibrary = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ["images"],
       quality: 0.92
     });
     if (!result.canceled && result.assets[0]?.uri) {
@@ -55,7 +77,7 @@ export function CaptureScreen({ onCaptured }: { onCaptured: (input: { imageUri?:
       setImageUri(asset.uri);
       setImageSize(sourceSize);
       setCropRect({ left: 8, top: 8, width: 84, height: 64 });
-      await runOcr(asset.uri);
+      resetOcrFields();
     }
   };
 
@@ -66,7 +88,7 @@ export function CaptureScreen({ onCaptured }: { onCaptured: (input: { imageUri?:
       return;
     }
     const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ["images"],
       quality: 0.92
     });
     if (!result.canceled && result.assets[0]?.uri) {
@@ -77,7 +99,7 @@ export function CaptureScreen({ onCaptured }: { onCaptured: (input: { imageUri?:
       setImageUri(asset.uri);
       setImageSize(sourceSize);
       setCropRect({ left: 8, top: 8, width: 84, height: 64 });
-      await runOcr(asset.uri);
+      resetOcrFields();
     }
   };
 
@@ -99,16 +121,17 @@ export function CaptureScreen({ onCaptured }: { onCaptured: (input: { imageUri?:
     }
   };
 
-  const resetCrop = async () => {
+  const resetCrop = () => {
     if (!originalImageUri) return;
     setImageUri(originalImageUri);
     setImageSize(originalImageSize);
     setCropRect({ left: 8, top: 8, width: 84, height: 64 });
-    await runOcr(originalImageUri);
+    resetOcrFields();
   };
 
   const imageAspect = imageSize ? imageSize.width / imageSize.height : undefined;
   const previewHeight = imageAspect && containerSize.width > 0 ? containerSize.width / imageAspect : undefined;
+  const canApplyCrop = Boolean(imageUri && originalImageUri === imageUri && !isCropping);
 
   return (
     <ScrollView scrollEnabled={scrollEnabled} contentContainerStyle={styles.screen}>
@@ -153,7 +176,7 @@ export function CaptureScreen({ onCaptured }: { onCaptured: (input: { imageUri?:
             <View style={styles.cropPanel}>
               <Text style={styles.inputLabel}>框出错题区域 — 拖拽橙色框和四角圆点来调整</Text>
               <View style={styles.previewActions}>
-                <SecondaryButton icon="crop-outline" label={isCropping ? "裁剪中" : "应用裁剪并重新 OCR"} onPress={applyCrop} />
+                <SecondaryButton icon="crop-outline" label={isCropping ? "裁剪中" : "应用裁剪并 OCR"} onPress={applyCrop} disabled={!canApplyCrop} />
                 <SecondaryButton icon="refresh-outline" label="重置原图" onPress={resetCrop} />
               </View>
             </View>
@@ -167,14 +190,25 @@ export function CaptureScreen({ onCaptured }: { onCaptured: (input: { imageUri?:
               color={ocrState === "failed" ? palette.primary : palette.teal}
             />
             <Text style={[styles.ocrStatusText, ocrState === "failed" && styles.ocrStatusTextFailed]}>
-              {ocrState === "idle" ? "拍照或导入后会自动执行 OCR" : null}
+              {ocrState === "idle" ? "拍照或导入后，先框出错题区域，再点击应用裁剪并 OCR" : null}
               {ocrState === "running" ? "OCR 识别中，完成后会自动填入题干" : null}
               {ocrState === "done" ? `OCR 已完成，置信度 ${Math.round((ocrResult?.confidence ?? 0) * 100)}%，请核对` : null}
-              {ocrState === "failed" ? "OCR 失败，可先手动录入题干并保存" : null}
+              {ocrState === "failed" ? `OCR 失败：${ocrError || "可先手动录入题干并保存"}` : null}
             </Text>
           </View>
           <Text style={styles.inputLabel}>OCR 题干，可手动修改</Text>
-          <TextInput multiline value={ocrText} onChangeText={setOcrText} placeholder="拍照或导入图片后自动识别，也可手动输入" style={styles.textArea} />
+          <TextInput
+            multiline
+            value={ocrText}
+            onChangeText={setOcrText}
+            onSelectionChange={(event) => setQuestionSelection(event.nativeEvent.selection)}
+            placeholder="应用裁剪并 OCR 后自动填入，也可手动输入"
+            selection={questionSelection}
+            style={styles.textArea}
+          />
+          <View style={styles.previewActions}>
+            <SecondaryButton icon="remove-outline" label="插入填空线" onPress={insertBlankIntoQuestion} />
+          </View>
           <Text style={styles.inputLabel}>学生原答案</Text>
           <TextInput value={studentAnswer} onChangeText={setStudentAnswer} style={styles.input} />
           <Pressable

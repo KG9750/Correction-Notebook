@@ -1,6 +1,6 @@
 import { getApiBaseUrl } from "./client";
 import type { AppSettings } from "../types";
-import type { AIAnalysis, GeneratedQuestion, LatexJobHandoff, PracticeAttempt, TestPaper, TestPaperQuestion } from "@correction-notebook/shared";
+import type { AIAnalysis, GeneratedQuestion, LatexJobHandoff, Mistake, PracticeAttempt, TestPaper, TestPaperQuestion } from "@correction-notebook/shared";
 
 export type ServerAnalysisResponse = AIAnalysis & {
   analysis_id: string;
@@ -17,6 +17,7 @@ type EnrichInput = {
   ocrText: string;
   studentAnswer: string;
   imageUri?: string | undefined;
+  avoidQuestionTexts?: string[];
   settings: Pick<AppSettings, "deepseekModel" | "practiceCount" | "practiceDifficulty">;
 };
 
@@ -43,60 +44,34 @@ export type CreateFreshTestPaperResult = {
   questions: TestPaperQuestion[];
 };
 
+export type TestPaperStatusResult = {
+  paper_id: string;
+  latex_job: LatexJobHandoff;
+  paper: TestPaper;
+};
+
 export async function enrichMistakeWithServerAI(input: EnrichInput): Promise<EnrichMistakeResult | undefined> {
+  const serverMistakeId = await createServerMistake(input);
+  const analysis = await analyzeServerMistake(serverMistakeId, input.settings.deepseekModel);
+
   const base = getApiBaseUrl();
-
-  // 1. Create mistake on server
-  const createRes = await fetch(`${base}/api/v1/mistakes`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      student_id: input.studentId,
-      grade: input.grade,
-      ocr_text: input.ocrText,
-      normalized_question_text: input.ocrText,
-      student_answer: input.studentAnswer,
-      ...(input.imageUri ? { image_uri: input.imageUri } : {}),
-      source_name: "iPad 拍题"
-    })
-  }).catch(() => undefined);
-
-  if (!createRes?.ok) {
-    console.error("[enrich] Create mistake failed:", createRes?.status);
-    return undefined;
-  }
-  const { mistake_id: serverMistakeId } = (await createRes.json()) as { mistake_id: string };
-
-  // 2. Get AI analysis
-  const analyzeRes = await fetch(`${base}/api/v1/mistakes/${encodeURIComponent(serverMistakeId)}/analyze`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: input.settings.deepseekModel })
-  }).catch(() => undefined);
-
-  if (!analyzeRes?.ok) {
-    const payload = await readErrorPayload(analyzeRes);
-    const log = payload?.error === "deepseek_not_configured" ? console.warn : console.error;
-    log("[enrich] Analyze failed:", analyzeRes?.status, payload?.error ?? "");
-    return undefined;
-  }
-  const analysis = (await analyzeRes.json()) as ServerAnalysisResponse;
-
-  // 3. Generate AI practice questions
-  const practiceRes = await fetch(`${base}/api/v1/mistakes/${encodeURIComponent(serverMistakeId)}/generate-practice`, {
+  const practiceRes = await fetchOrThrow(`${base}/api/v1/mistakes/${encodeURIComponent(serverMistakeId)}/generate-practice`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       count: input.settings.practiceCount,
       difficulty_mode: input.settings.practiceDifficulty,
+      avoid_question_texts: input.avoidQuestionTexts ?? [],
       model: input.settings.deepseekModel
     })
-  }).catch(() => undefined);
+  }).catch((error: unknown) => error instanceof Error ? error : new Error("生成变式练习时发生未知网络错误。"));
+
+  if (practiceRes instanceof Error) {
+    return { analysis, questions: [], practiceError: practiceRes.message };
+  }
 
   if (!practiceRes?.ok) {
     const payload = await readErrorPayload(practiceRes);
-    const log = payload?.error === "deepseek_not_configured" ? console.warn : console.error;
-    log("[enrich] Generate practice failed:", practiceRes?.status, payload?.error ?? "");
     return { analysis, questions: [], practiceError: payload?.message ?? payload?.error ?? "practice_generation_failed" };
   }
   const practice = (await practiceRes.json()) as ServerPracticeResponse;
@@ -111,9 +86,54 @@ export async function enrichMistakeWithServerAI(input: EnrichInput): Promise<Enr
   return { analysis, questions: practice.questions };
 }
 
+export async function analyzeMistakeWithServerAI(input: EnrichInput): Promise<ServerAnalysisResponse> {
+  const serverMistakeId = await createServerMistake(input);
+  return analyzeServerMistake(serverMistakeId, input.settings.deepseekModel);
+}
+
+async function createServerMistake(input: EnrichInput): Promise<string> {
+  const base = getApiBaseUrl();
+  const createRes = await fetchOrThrow(`${base}/api/v1/mistakes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      student_id: input.studentId,
+      grade: input.grade,
+      ocr_text: input.ocrText,
+      normalized_question_text: input.ocrText,
+      student_answer: input.studentAnswer,
+      ...(input.imageUri ? { image_uri: input.imageUri } : {}),
+      source_name: "iPad 拍题"
+    })
+  });
+
+  if (!createRes?.ok) {
+    const payload = await readErrorPayload(createRes);
+    throw new Error(`创建服务端错题失败（${createRes.status}）：${payload?.message ?? payload?.error ?? "后端没有返回错误详情。"}`);
+  }
+  const { mistake_id: serverMistakeId } = (await createRes.json()) as { mistake_id: string };
+  return serverMistakeId;
+}
+
+async function analyzeServerMistake(serverMistakeId: string, model: AppSettings["deepseekModel"]): Promise<ServerAnalysisResponse> {
+  const base = getApiBaseUrl();
+  const analyzeRes = await fetchOrThrow(`${base}/api/v1/mistakes/${encodeURIComponent(serverMistakeId)}/analyze`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model })
+  });
+
+  if (!analyzeRes?.ok) {
+    const payload = await readErrorPayload(analyzeRes);
+    throw new Error(`DeepSeek 错因讲解失败（${analyzeRes.status}）：${payload?.message ?? payload?.error ?? "后端没有返回错误详情。"}`);
+  }
+
+  return analyzeRes.json() as Promise<ServerAnalysisResponse>;
+}
+
 export async function submitPracticeAttempt(input: {
   studentId: string;
-  questionId: string;
+  question: GeneratedQuestion;
   answerText: string;
   practiceTotal: 3 | 5;
   model: AppSettings["deepseekModel"];
@@ -124,7 +144,8 @@ export async function submitPracticeAttempt(input: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       student_id: input.studentId,
-      question_id: input.questionId,
+      question_id: input.question.id,
+      question: input.question,
       answer_text: input.answerText,
       practice_total: input.practiceTotal,
       model: input.model
@@ -142,6 +163,7 @@ export async function createFreshTestPaper(input: {
   questionCount: 5 | 10 | 15 | 20;
   difficultyMode: AppSettings["practiceDifficulty"];
   includeAnswerPdf: boolean;
+  sourceMistakes: Mistake[];
 }): Promise<CreateFreshTestPaperResult> {
   const base = getApiBaseUrl();
   const response = await fetch(`${base}/api/v1/test-papers`, {
@@ -157,7 +179,8 @@ export async function createFreshTestPaper(input: {
         knowledge_points: [],
         error_types: [],
         mastery_statuses: ["not_mastered", "partially_mastered", "relapsed"]
-      }
+      },
+      source_mistakes: input.sourceMistakes
     })
   });
   if (!response.ok) {
@@ -165,6 +188,28 @@ export async function createFreshTestPaper(input: {
     throw new Error(payload?.message ?? payload?.error ?? "test_paper_generation_failed");
   }
   return response.json() as Promise<CreateFreshTestPaperResult>;
+}
+
+export async function getTestPaperStatus(paperId: string): Promise<TestPaperStatusResult> {
+  const base = getApiBaseUrl();
+  const response = await fetch(`${base}/api/v1/test-papers/${encodeURIComponent(paperId)}/status`);
+  if (!response.ok) {
+    const payload = await readErrorPayload(response);
+    throw new Error(payload?.message ?? payload?.error ?? "test_paper_status_failed");
+  }
+  return response.json() as Promise<TestPaperStatusResult>;
+}
+
+async function fetchOrThrow(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    throw new Error(`无法连接后端 API ${getApiBaseUrl()}。请确认 Mac 上已启动 API 服务，且 iPad 与 Mac 在同一局域网。原始错误：${formatError(error)}`);
+  }
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function readErrorPayload(response: Response | undefined): Promise<{ error?: string; message?: string } | undefined> {

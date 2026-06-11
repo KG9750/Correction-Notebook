@@ -20,13 +20,13 @@ export type GeneratePracticeInput = {
   mistake: Mistake;
   count: 3 | 5;
   difficulty_mode: "adaptive" | "basic" | "standard" | "challenge";
+  avoid_question_texts?: string[];
   model?: DeepSeekModel;
 };
 
 export type GradeAnswerInput = {
   question: GeneratedQuestion;
   answer_text: string;
-  manual_is_correct?: boolean;
   model?: DeepSeekModel;
 };
 

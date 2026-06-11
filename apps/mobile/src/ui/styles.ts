@@ -663,6 +663,88 @@ export const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: palette.primary
   },
+  choiceTypePill: {
+    alignSelf: "flex-start",
+    borderRadius: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    fontFamily: bodyFont,
+    fontSize: 12,
+    fontWeight: "700"
+  },
+  choiceTypePillSingle: {
+    backgroundColor: palette.tealTint,
+    color: palette.teal,
+    borderWidth: 1,
+    borderColor: palette.tealBorder
+  },
+  choiceTypePillMultiple: {
+    backgroundColor: palette.primaryTint,
+    color: palette.primary,
+    borderWidth: 1,
+    borderColor: palette.primarySoft
+  },
+  choiceOptions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8
+  },
+  choiceOption: {
+    flexGrow: 1,
+    flexBasis: 0,
+    minWidth: 118,
+    minHeight: 40,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: palette.hairlineStrong,
+    backgroundColor: palette.paper,
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7
+  },
+  choiceOptionSelected: {
+    borderColor: palette.primary,
+    backgroundColor: "#fff7ee"
+  },
+  choiceOptionLabel: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    textAlign: "center",
+    lineHeight: 24,
+    overflow: "hidden",
+    backgroundColor: palette.hairline,
+    color: palette.ink,
+    fontFamily: bodyFont,
+    fontSize: 13,
+    fontWeight: "700"
+  },
+  choiceOptionLabelSelected: {
+    backgroundColor: palette.primary,
+    color: palette.canvas
+  },
+  choiceOptionText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontFamily: bodyFont,
+    color: palette.ink
+  },
+  practiceBatchActions: {
+    minHeight: 52,
+    borderRadius: 8,
+    padding: 12,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    backgroundColor: palette.paper,
+    borderWidth: 1,
+    borderColor: palette.hairline
+  },
   textArea: {
     minHeight: 126,
     borderRadius: 8,
@@ -911,6 +993,9 @@ export const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: palette.paper
   },
+  iconButtonDisabled: {
+    opacity: 0.72
+  },
   tag: {
     paddingVertical: 6,
     paddingHorizontal: 10,
@@ -1053,5 +1138,23 @@ export const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 12
+  },
+  jobStatusBox: {
+    borderRadius: 8,
+    padding: 14,
+    backgroundColor: palette.paper,
+    borderWidth: 1,
+    borderColor: palette.hairline,
+    gap: 10
+  },
+  jobFileRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10
+  },
+  jobFileText: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2
   },
 });

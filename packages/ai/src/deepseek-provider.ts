@@ -31,7 +31,7 @@ const SYSTEM_MATH_TUTOR = `你是一位专业的小学/初中数学辅导老师�
 1. 所有回复必须是中文，除了数学公式和数字。
 2. 你需要输出的所有 JSON 字段都必须提供，不能省略。
 3. 分析要精准具体，不能泛泛而谈。
-4. 变式练习题必须和原题是同一知识点、同一题型，但要改变数字、情境或条件，不是照搬原题。
+4. 变式练习题必须和原题是同一知识点、相近考法，但必须改写成选择题，不要生成填空题或解答题。
 5. 题目和答案要适合 初一（七年级）左右难度。`;
 
 export class DeepSeekProvider implements LLMProvider {
@@ -101,6 +101,10 @@ export class DeepSeekProvider implements LLMProvider {
     const mistake = input.mistake;
     const question = mistake.normalized_question_text || mistake.ocr_text;
     const analysis = `${mistake.main_error_type ?? "方法性错误"} — ${mistake.knowledge_points.join("、")}`;
+    const avoidText = (input.avoid_question_texts ?? [])
+      .filter(Boolean)
+      .map((text, index) => `${index + 1}. ${text}`)
+      .join("\n") || "无";
 
     const prompt = `请根据原错题生成 ${input.count} 道变式练习题。
 
@@ -109,17 +113,26 @@ export class DeepSeekProvider implements LLMProvider {
 【错因标签】${analysis}
 【难度模式】${input.difficulty_mode}
 【题型分布】same_pattern 同型变数、condition_change 条件变更、trap 易错陷阱、number_change 数字变更、integrated 综合题
+【本次刷新禁止复用的旧题题面】
+${avoidText}
 
 请输出严格 JSON 对象（不要带 markdown 代码块标记）：
 
 {
   "questions": [
     {
-      "question_text": "变式题题干",
+      "question_text": "变式题题干，不要把选项写进题干",
+      "choice_answer_type": "single / multiple",
+      "choice_options": [
+        { "label": "A", "text": "选项内容" },
+        { "label": "B", "text": "选项内容" },
+        { "label": "C", "text": "选项内容" },
+        { "label": "D", "text": "选项内容" }
+      ],
       "difficulty": "basic / standard / challenge",
       "question_type": "same_pattern / condition_change / trap / number_change / integrated",
       "estimated_time_seconds": 120,
-      "answer": "标准答案",
+      "answer": "正确选项标签；单选如 A，多选如 A,C",
       "solution_steps": ["步骤1", "步骤2", "步骤3"],
       "knowledge_points": ["知识点"],
       "target_error_type": "针对的错因类型",
@@ -128,40 +141,48 @@ export class DeepSeekProvider implements LLMProvider {
   ]
 }
 
-要求：题目必须和原题同一个知识点，但数字、情境、问法要有变化。`;
+要求：
+1. 每道变式练习必须是选择题，必须明确 choice_answer_type 是 single 或 multiple。
+2. 单选题至少 4 个选项，且只有 1 个正确选项；多选题至少 4 个选项，且至少 2 个正确选项。
+3. answer 只填写正确选项标签，不要填写完整解答；多选用英文逗号连接，例如 A,C。
+4. solution_steps 最后一步必须明确写“故正确选项为 X”，且 X 必须与 answer 字段完全一致；不要出现解析结论与 answer 不一致的题。
+5. 如果题目问“不能取 / 不可能 / 不正确 / 不成立”，必须逐个代入所有选项；若有多个选项符合，必须设为 multiple，不能伪装成单选。
+6. question_text 里不要出现 ____、横线填空、括号填空；需要作答的内容必须放进 choice_options。
+7. 题目必须和原题同一个知识点，但数字、情境、问法要有变化。
+8. 如果“禁止复用的旧题题面”不是“无”，本次生成的 question_text 不能与其中任何一题相同或仅改标点、空格。`;
 
     const raw = await this.chat(prompt, input.model);
     const parsed = this.parseJson<RawQuestion[] | { questions?: RawQuestion[] }>(raw);
     const parsedQuestions = Array.isArray(parsed) ? parsed : parsed.questions;
     const questions = (Array.isArray(parsedQuestions) ? parsedQuestions : []).slice(0, input.count);
 
-    return questions.map((q) => ({
-      id: createId("gq"),
-      mistake_id: mistake.id,
-      question_text: q.question_text || "请列方程解答。",
-      difficulty: toDifficulty(q.difficulty),
-      question_type: toQuestionType(q.question_type),
-      estimated_time_seconds: typeof q.estimated_time_seconds === "number" ? q.estimated_time_seconds : 120,
-      answer: q.answer || "略",
-      solution_steps: q.solution_steps?.length ? q.solution_steps : ["设未知数。", "列方程。", "求解。"],
-      knowledge_points: q.knowledge_points?.length ? q.knowledge_points : (mistake.knowledge_points.length ? mistake.knowledge_points : ["一元一次方程"]),
-      target_error_type: q.target_error_type || mistake.main_error_type || "方法性错误",
-      why_related_to_original_mistake: q.why_related_to_original_mistake || "与原错题考查相同知识点。",
-      verification_status: "passed",
-      created_at: nowIso()
-    }));
+    return questions.map((q) => {
+      const choiceAnswerType = toChoiceAnswerType(q.choice_answer_type);
+      const choiceOptions = normalizeChoiceOptions(q.choice_options);
+      const questionText = requireNonEmpty(q.question_text, "practice question_text");
+      const solutionSteps = requireStringArray(q.solution_steps, "practice solution_steps");
+      const knowledgePoints = requireStringArray(q.knowledge_points, "practice knowledge_points");
+      return {
+        id: createId("gq"),
+        mistake_id: mistake.id,
+        question_text: questionText,
+        choice_answer_type: choiceAnswerType,
+        choice_options: choiceOptions,
+        difficulty: toDifficulty(q.difficulty),
+        question_type: toQuestionType(q.question_type),
+        estimated_time_seconds: typeof q.estimated_time_seconds === "number" ? q.estimated_time_seconds : 120,
+        answer: normalizeChoiceAnswer(q.answer, choiceAnswerType, choiceOptions),
+        solution_steps: solutionSteps,
+        knowledge_points: knowledgePoints,
+        target_error_type: requireNonEmpty(q.target_error_type, "practice target_error_type"),
+        why_related_to_original_mistake: requireNonEmpty(q.why_related_to_original_mistake, "practice why_related_to_original_mistake"),
+        verification_status: "pending",
+        created_at: nowIso()
+      };
+    });
   }
 
   async gradeAnswer(input: GradeAnswerInput): Promise<Pick<PracticeAttempt, "is_correct" | "feedback" | "error_type_if_wrong" | "graded_by">> {
-    if (input.manual_is_correct !== undefined) {
-      return {
-        is_correct: input.manual_is_correct,
-        feedback: input.manual_is_correct ? "已确认正确。" : "已标记错误。",
-        error_type_if_wrong: input.manual_is_correct ? null : input.question.target_error_type,
-        graded_by: "manual"
-      };
-    }
-
     const prompt = `请批改这道练习题。
 
 【题目】${input.question.question_text}
@@ -228,13 +249,13 @@ ${sourceSummary}
 
     return (Array.isArray(rawQuestions) ? rawQuestions : []).slice(0, input.question_count).map((question) => ({
       id: createId("tpq"),
-      question_text: question.question_text || "请解答这道复测题。",
+      question_text: requireNonEmpty(question.question_text, "test paper question_text"),
       ...(question.question_latex ? { question_latex: question.question_latex } : {}),
       difficulty: toDifficulty(question.difficulty),
-      answer: question.answer || "略",
-      solution_steps: question.solution_steps?.length ? question.solution_steps : ["审题。", "列式。", "求解。"],
-      knowledge_points: question.knowledge_points?.length ? question.knowledge_points : [input.knowledge_distribution[0]?.knowledge_point ?? "综合复习"],
-      target_error_type: question.target_error_type || input.error_distribution[0]?.error_type || "方法性错误",
+      answer: requireNonEmpty(question.answer, "test paper answer"),
+      solution_steps: requireStringArray(question.solution_steps, "test paper solution_steps"),
+      knowledge_points: requireStringArray(question.knowledge_points, "test paper knowledge_points"),
+      target_error_type: requireNonEmpty(question.target_error_type, "test paper target_error_type"),
       source_mistake_ids: question.source_mistake_ids?.length ? question.source_mistake_ids : input.source_mistakes.slice(0, 3).map((mistake) => mistake.id)
     }));
   }
@@ -257,7 +278,7 @@ ${sourceSummary}
     const parsed = this.parseJson<VerifyMathOutput>(raw);
 
     return {
-      verification_status: parsed.verification_status === "passed" || parsed.verification_status === "failed" ? parsed.verification_status : "passed",
+      verification_status: parsed.verification_status === "passed" || parsed.verification_status === "failed" ? parsed.verification_status : "failed",
       reason: parsed.reason || "AI verification completed"
     };
   }
@@ -311,8 +332,8 @@ ${sourceSummary}
     }
     try {
       return JSON.parse(cleaned) as T;
-    } catch {
-      return {} as T;
+    } catch (error) {
+      throw new Error(`DeepSeek returned invalid JSON: ${error instanceof Error ? error.message : "parse_failed"}`);
     }
   }
 }
@@ -344,6 +365,8 @@ type RawAnalysis = {
 
 type RawQuestion = {
   question_text?: string;
+  choice_answer_type?: string;
+  choice_options?: Array<{ label?: string; text?: string }>;
   difficulty?: string;
   question_type?: string;
   estimated_time_seconds?: number;
@@ -353,6 +376,50 @@ type RawQuestion = {
   target_error_type?: string;
   why_related_to_original_mistake?: string;
 };
+
+function toChoiceAnswerType(value: string | undefined): "single" | "multiple" {
+  if (value === "single" || value === "multiple") return value;
+  throw new Error("DeepSeek practice question is missing a valid choice_answer_type.");
+}
+
+function normalizeChoiceOptions(options: RawQuestion["choice_options"]): Array<{ label: string; text: string }> {
+  const normalized = (options ?? [])
+    .map((option) => ({
+      label: (option.label ?? "").trim().toUpperCase(),
+      text: (option.text ?? "").trim()
+    }))
+    .filter((option) => /^[A-Z]$/.test(option.label) && option.text.length > 0);
+  if (normalized.length < 4) throw new Error("DeepSeek practice question has fewer than 4 choice options.");
+  return normalized.slice(0, 6);
+}
+
+function normalizeChoiceAnswer(
+  answer: string | undefined,
+  type: "single" | "multiple",
+  options: Array<{ label: string; text: string }>
+): string {
+  const optionLabels = new Set(options.map((option) => option.label));
+  const labels = (answer ?? "")
+    .toUpperCase()
+    .split(/[,，、\s]+/)
+    .map((label) => label.trim())
+    .filter((label) => optionLabels.has(label));
+  if (labels.length === 0) throw new Error("DeepSeek practice question is missing a valid choice answer.");
+  const uniqueLabels = [...new Set(labels)];
+  return type === "multiple" ? uniqueLabels.join(",") : uniqueLabels[0] ?? "A";
+}
+
+function requireNonEmpty(value: string | undefined, field: string): string {
+  const text = value?.trim() ?? "";
+  if (!text) throw new Error(`DeepSeek output missing ${field}.`);
+  return text;
+}
+
+function requireStringArray(value: string[] | undefined, field: string): string[] {
+  const items = (value ?? []).map((item) => item.trim()).filter(Boolean);
+  if (items.length === 0) throw new Error(`DeepSeek output missing ${field}.`);
+  return items;
+}
 
 type RawTestPaperQuestion = {
   question_text?: string;

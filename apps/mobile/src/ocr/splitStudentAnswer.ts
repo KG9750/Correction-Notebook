@@ -41,7 +41,11 @@ function splitByAnswerAboveLine(text: string): SplitOcrResult | undefined {
 
   const answerLine = lines[ruleIndex - 1] ?? "";
   const questionLines = lines.slice(0, ruleIndex - 1);
-  const questionText = collapseWhitespace(questionLines.join(" "));
+  const suffixLines = lines.slice(ruleIndex + 1);
+  const questionText = collapseWhitespace([
+    ...questionLines,
+    ...(suffixLines.length > 0 ? ["____", ...suffixLines] : [])
+  ].join(" "));
   const studentAnswer = collapseWhitespace(answerLine);
 
   if (!questionText || !isAnswerLike(studentAnswer)) return undefined;
@@ -101,5 +105,8 @@ function isAnswerLike(value: string): boolean {
 }
 
 function collapseWhitespace(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
+  return value
+    .replace(/\s+/g, " ")
+    .replace(/\s*____\s*/g, "____")
+    .trim();
 }

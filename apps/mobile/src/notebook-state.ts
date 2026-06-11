@@ -5,6 +5,7 @@ import {
   hasMasteryConfirmationEvidence,
   nextReviewDueForMastery,
   nowIso,
+  type LatexJobHandoff,
   type AIAnalysis,
   type GeneratedQuestion,
   type Mistake,
@@ -37,6 +38,9 @@ export function replaceMistakeAI(
     ...state,
     analyses: [analysis, ...state.analyses.filter((a) => a.mistake_id !== mistakeId && a.id !== analysis.id)],
     generatedQuestions: nextQuestions,
+    attempts: questions.length > 0
+      ? state.attempts.filter((attempt) => attempt.mistake_id !== mistakeId)
+      : state.attempts,
     mistakes: state.mistakes.map((m) =>
       m.id === mistakeId
         ? {
@@ -163,6 +167,8 @@ export function recordPracticeAttempt(state: NotebookState, attempt: PracticeAtt
 
   const localAttempt = {
     ...attempt,
+    mistake_id: question.mistake_id,
+    generated_question_id: question.id,
     questionText: question.question_text
   };
 
@@ -230,6 +236,22 @@ export function getDueReviewMistakes(state: NotebookState, asOf = new Date()): M
 
 export function recordTestPaper(state: NotebookState, paper: TestPaper): NotebookState {
   return { ...state, activeSection: "paper", papers: [paper, ...state.papers] };
+}
+
+export function replaceTestPaperLatexJob(state: NotebookState, paperId: string, latexJob: LatexJobHandoff): NotebookState {
+  return {
+    ...state,
+    papers: state.papers.map((paper) =>
+      paper.id === paperId
+        ? {
+            ...paper,
+            student_pdf_url: latexJob.output_paths.student_pdf_path ?? paper.student_pdf_url,
+            answer_pdf_url: latexJob.output_paths.answer_pdf_path ?? paper.answer_pdf_url,
+            latex_job: latexJob
+          }
+        : paper
+    )
+  };
 }
 
 export function createPreviewTestPaper(state: NotebookState): TestPaper | undefined {

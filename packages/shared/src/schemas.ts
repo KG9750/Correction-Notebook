@@ -78,6 +78,11 @@ export const GeneratedQuestionSchema = z.object({
   mistake_id: z.string(),
   question_text: z.string().min(1),
   question_latex: z.string().optional(),
+  choice_answer_type: z.enum(["single", "multiple"]).optional(),
+  choice_options: z.array(z.object({
+    label: z.string().min(1),
+    text: z.string().min(1)
+  })).optional(),
   difficulty: z.enum(["basic", "standard", "challenge"]),
   question_type: z.enum(["same_pattern", "condition_change", "trap", "number_change", "integrated"]),
   estimated_time_seconds: z.number().int().positive(),
@@ -122,6 +127,9 @@ export const LatexJobHandoffSchema = z.object({
   workspace_path: z.string(),
   manifest_path: z.string(),
   status: TestPaperJobStatusSchema,
+  progress_message: z.string().optional(),
+  created_at: z.string().optional(),
+  updated_at: z.string().optional(),
   expected_outputs: z.object({
     student_pdf_path: z.string(),
     answer_pdf_path: z.string()
@@ -130,6 +138,11 @@ export const LatexJobHandoffSchema = z.object({
     student_pdf_path: z.string().optional(),
     answer_pdf_path: z.string().optional()
   }).default({}),
+  files: z.object({
+    manifest_exists: z.boolean(),
+    student_pdf_exists: z.boolean(),
+    answer_pdf_exists: z.boolean()
+  }).optional(),
   failure_reason: z.string().optional()
 });
 
@@ -198,6 +211,7 @@ export const OcrResultSchema = z.object({
 export const GeneratePracticeRequestSchema = z.object({
   count: z.union([z.literal(3), z.literal(5)]).default(3),
   difficulty_mode: z.enum(["adaptive", "basic", "standard", "challenge"]).default("adaptive"),
+  avoid_question_texts: z.array(z.string()).default([]),
   model: DeepSeekModelSchema.optional()
 });
 
@@ -207,11 +221,14 @@ export const AnalyzeMistakeRequestSchema = z.object({
 
 export const PracticeAttemptRequestSchema = z.object({
   student_id: z.string(),
-  question_id: z.string(),
+  question_id: z.string().optional(),
+  question: GeneratedQuestionSchema.optional(),
   answer_text: z.string(),
-  manual_is_correct: z.boolean().optional(),
   practice_total: z.union([z.literal(3), z.literal(5)]).default(3),
   model: DeepSeekModelSchema.optional()
+}).refine((value) => Boolean(value.question_id || value.question), {
+  message: "question_id or question is required",
+  path: ["question"]
 });
 
 export const CreateTestPaperRequestSchema = z.object({
@@ -229,6 +246,7 @@ export const CreateTestPaperRequestSchema = z.object({
     error_types: z.array(z.string()).default([]),
     mastery_statuses: z.array(MasteryStatusSchema).default(["not_mastered", "partially_mastered"])
   }),
+  source_mistakes: z.array(MistakeSchema).default([]),
   include_answer_pdf: z.boolean().default(false)
 });
 

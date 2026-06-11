@@ -6,43 +6,26 @@ export type OcrResult = {
   normalizedText: string;
   confidence: number;
   needsUserReview: boolean;
-  provider: "google-vision" | "baidu-ocr" | "backend-ocr" | "vision-native" | "deterministic-fallback";
+  provider: "google-vision" | "baidu-ocr" | "backend-ocr" | "ios-vision";
 };
 
-const fallbackMathSamples = [
-  "一根绳子剪去 8 米后还剩 17 米，原来长多少米？请列方程。",
-  "解方程 3x - 7 = 11。",
-  "甲数比乙数的 2 倍少 5，甲数是 19。乙数是多少？"
-];
-
 export async function recognizeMistakeImage(imageUri: string): Promise<OcrResult> {
-  const backendResult = await recognizeWithBackendOcr(imageUri).catch(() => undefined);
-  if (backendResult) return backendResult;
-
-  const nativeResult = await recognizeWithNativeVision(imageUri);
-  if (nativeResult) {
-    const normalizedText = normalizeOcrText(nativeResult.rawText);
-    return {
-      rawText: nativeResult.rawText,
-      normalizedText,
-      confidence: nativeResult.confidence,
-      needsUserReview: nativeResult.confidence < 0.86,
-      provider: "vision-native"
-    };
+  try {
+    return await recognizeWithBackendOcr(imageUri);
+  } catch (backendError) {
+    const nativeResult = await recognizeWithNativeVision(imageUri);
+    if (nativeResult) {
+      const normalizedText = normalizeOcrText(nativeResult.rawText);
+      return {
+        rawText: nativeResult.rawText,
+        normalizedText,
+        confidence: nativeResult.confidence,
+        needsUserReview: nativeResult.confidence < 0.86,
+        provider: "ios-vision"
+      };
+    }
+    throw backendError;
   }
-
-  await new Promise((resolve) => setTimeout(resolve, 450));
-
-  const sampleIndex = Math.abs(hashString(imageUri)) % fallbackMathSamples.length;
-  const rawText = fallbackMathSamples[sampleIndex] ?? "请手动确认题干。";
-
-  return {
-    rawText,
-    normalizedText: normalizeOcrText(rawText),
-    confidence: 0.72,
-    needsUserReview: true,
-    provider: "deterministic-fallback"
-  };
 }
 
 export function normalizeOcrText(value: string): string {
@@ -50,9 +33,32 @@ export function normalizeOcrText(value: string): string {
 }
 
 export function postprocessMathOcrText(value: string): string {
-  return latexToReadableMath(value)
+  return normalizeChinesePunctuation(latexToReadableMath(value))
     .replace(/(\([^()\n]{1,80}\))([23456789])(?=($|[\s，。,.；;、?!？+\-*/=]))/g, (_, group: string, exponent: string) => `${group}${toSuperscript(exponent)}`)
     .replace(/([A-Za-z0-9])\^?([23])(?=($|[\s，。,.；;、?!？+\-*/=]))/g, (_, base: string, exponent: string) => `${base}${toSuperscript(exponent)}`);
+}
+
+export function normalizeChinesePunctuation(value: string): string {
+  if (!/[\u3400-\u9fff]/.test(value)) return value;
+
+  return value
+    .replace(/,/g, (match, offset: number, text: string) => {
+      const previous = text[offset - 1] ?? "";
+      const nextText = text.slice(offset + 1);
+      if (/\d/.test(previous) && /^\d{3}(\D|$)/.test(nextText)) return match;
+      return "，";
+    })
+    .replace(/\?/g, "？")
+    .replace(/!/g, "！")
+    .replace(/;/g, "；")
+    .replace(/:/g, "：")
+    .replace(/\./g, (match, offset: number, text: string) => {
+      const previous = text[offset - 1] ?? "";
+      const next = text[offset + 1] ?? "";
+      if (/\d/.test(previous) && /\d/.test(next)) return match;
+      if (/\d/.test(previous) && /\s/.test(next)) return match;
+      return "。";
+    });
 }
 
 export function latexToReadableMath(value: string): string {
@@ -86,13 +92,4 @@ function toSuperscript(value: string): string {
     .split("")
     .map((character) => map[character] ?? character)
     .join("");
-}
-
-function hashString(value: string): number {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash << 5) - hash + value.charCodeAt(index);
-    hash |= 0;
-  }
-  return hash;
 }

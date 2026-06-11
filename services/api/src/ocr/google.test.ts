@@ -61,6 +61,41 @@ describe("Google Vision OCR client", () => {
     expect(result.words).toEqual([]);
   });
 
+  it("reconstructs a fill-in blank when Google Vision misses the underline but sees the answer above the gap", () => {
+    const result = normalizeGoogleVisionResponse({
+      fullTextAnnotation: {
+        text: "31\n18. 含有5个元素的集合共有 个非空真子集\n"
+      },
+      textAnnotations: [
+        { description: "31\n18. 含有5个元素的集合共有 个非空真子集" },
+        { description: "31", boundingPoly: { vertices: [{ x: 230, y: 30 }, { x: 270, y: 30 }, { x: 270, y: 55 }, { x: 230, y: 55 }] } },
+        { description: "18.", boundingPoly: { vertices: [{ x: 20, y: 80 }, { x: 55, y: 80 }, { x: 55, y: 105 }, { x: 20, y: 105 }] } },
+        { description: "含有5个元素的集合共有", boundingPoly: { vertices: [{ x: 60, y: 80 }, { x: 210, y: 80 }, { x: 210, y: 105 }, { x: 60, y: 105 }] } },
+        { description: "个非空真子集", boundingPoly: { vertices: [{ x: 300, y: 80 }, { x: 430, y: 80 }, { x: 430, y: 105 }, { x: 300, y: 105 }] } }
+      ]
+    });
+
+    expect(result.raw_text).toBe("18. 含有5个元素的集合共有\n31\n____\n个非空真子集");
+    expect(result.normalized_text).toBe("18. 含有5个元素的集合共有 31 ____ 个非空真子集");
+  });
+
+  it("keeps a fill-in blank when Google Vision misses both the underline and the handwritten answer", () => {
+    const result = normalizeGoogleVisionResponse({
+      fullTextAnnotation: {
+        text: "18. 含有5个元素的集合共有 个非空真子集\n"
+      },
+      textAnnotations: [
+        { description: "18. 含有5个元素的集合共有 个非空真子集" },
+        { description: "18.", boundingPoly: { vertices: [{ x: 20, y: 80 }, { x: 55, y: 80 }, { x: 55, y: 105 }, { x: 20, y: 105 }] } },
+        { description: "含有5个元素的集合共有", boundingPoly: { vertices: [{ x: 60, y: 80 }, { x: 210, y: 80 }, { x: 210, y: 105 }, { x: 60, y: 105 }] } },
+        { description: "个非空真子集", boundingPoly: { vertices: [{ x: 300, y: 80 }, { x: 430, y: 80 }, { x: 430, y: 105 }, { x: 300, y: 105 }] } }
+      ]
+    });
+
+    expect(result.raw_text).toBe("18. 含有5个元素的集合共有____个非空真子集");
+    expect(result.normalized_text).toBe("18. 含有5个元素的集合共有____个非空真子集");
+  });
+
   it("computes confidence from symbol-level confidences", () => {
     const result = normalizeGoogleVisionResponse({
       fullTextAnnotation: {
@@ -90,6 +125,13 @@ describe("Google Vision OCR client", () => {
   it("postprocesses common superscript OCR loss", () => {
     expect(postprocessMathOcrText("计算 (3x-y+2z)2 的值")).toBe("计算 (3x-y+2z)² 的值");
     expect(postprocessMathOcrText("x2 + y3")).toBe("x² + y³");
+  });
+
+  it("uses Chinese punctuation when OCR text contains Chinese", () => {
+    expect(postprocessMathOcrText("已知a=1,b=2,求a+b?")).toBe("已知a=1，b=2，求a+b？");
+    expect(postprocessMathOcrText("圆周率约为3.14, 不是3.15.")).toBe("圆周率约为3.14， 不是3.15。");
+    expect(postprocessMathOcrText("18. 含有5个元素的集合共有____个非空真子集")).toBe("18. 含有5个元素的集合共有____个非空真子集");
+    expect(postprocessMathOcrText("共有1,000个样本")).toBe("共有1,000个样本");
   });
 
   it("converts LaTeX superscripts into readable superscripts", () => {

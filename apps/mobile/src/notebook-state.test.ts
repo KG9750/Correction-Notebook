@@ -121,7 +121,8 @@ describe("mobile notebook state", () => {
   });
 
   it("keeps existing generated questions when a refresh returns analysis but no usable practice", () => {
-    const state = stateWithSamples();
+    let state = stateWithSamples();
+    state = recordPracticeAttempt(state, gradedAttempt("gq_001", true), 3);
     const next = replaceMistakeAI(
       state,
       "mistake_001",
@@ -135,6 +136,30 @@ describe("mobile notebook state", () => {
 
     expect(next.analyses[0]?.id).toBe("analysis_refresh");
     expect(next.generatedQuestions.filter((question) => question.mistake_id === "mistake_001")).toHaveLength(3);
+    expect(next.attempts.some((attempt) => attempt.mistake_id === "mistake_001")).toBe(true);
+  });
+
+  it("clears old practice attempts when refreshed practice questions replace the set", () => {
+    let state = stateWithSamples();
+    state = recordPracticeAttempt(state, gradedAttempt("gq_001", true), 3);
+    const mistakeId = "mistake_001";
+    const next = replaceMistakeAI(
+      state,
+      mistakeId,
+      {
+        ...sampleAnalyses[0]!,
+        id: "analysis_with_new_practice"
+      },
+      [{
+        ...sampleGeneratedQuestions[0]!,
+        id: "gq_new",
+        mistake_id: mistakeId,
+        question_text: "一根绳子剪去 5 米后还剩 12 米，原来长多少米？"
+      }]
+    );
+
+    expect(next.generatedQuestions.some((question) => question.id === "gq_new")).toBe(true);
+    expect(next.attempts.some((attempt) => attempt.mistake_id === mistakeId)).toBe(false);
   });
 
   it("updates mastery after three local practice attempts", () => {
@@ -162,6 +187,20 @@ describe("mobile notebook state", () => {
     const confirmed = confirmMistakeMastered(state, "mistake_001");
     expect(confirmed.mistakes.find((item) => item.id === "mistake_001")?.mastery_status).toBe("mastered");
     expect(confirmed.archivedMistakeIds).toContain("mistake_001");
+  });
+
+  it("normalizes server practice attempts to the local mistake before archive confirmation", () => {
+    let state = stateWithSamples();
+    state = recordPracticeAttempt(state, { ...gradedAttempt("gq_001", true), mistake_id: "server_mistake_001" }, 3);
+    state = recordPracticeAttempt(state, { ...gradedAttempt("gq_002", true), mistake_id: "server_mistake_001" }, 3);
+    state = recordPracticeAttempt(state, { ...gradedAttempt("gq_003", true), mistake_id: "server_mistake_001" }, 3);
+
+    expect(canConfirmMistakeMastered(state, "mistake_001")).toBe(true);
+
+    const confirmed = confirmMistakeMastered(state, "mistake_001");
+    expect(confirmed.activeSection).toBe("collection");
+    expect(confirmed.archivedMistakeIds).toContain("mistake_001");
+    expect(confirmed.mistakes.find((item) => item.id === "mistake_001")?.mastery_status).toBe("mastered");
   });
 
 
@@ -212,6 +251,16 @@ describe("mobile notebook state", () => {
     expect(mistake?.review_due_at).toBe("2026-05-23T00:00:00.000Z");
   });
 
+  it("keeps manual attempts out of mastery and archive evidence", () => {
+    let state = stateWithSamples();
+    state = recordPracticeAttempt(state, { ...gradedAttempt("gq_001", true), graded_by: "manual" }, 3);
+    state = recordPracticeAttempt(state, { ...gradedAttempt("gq_002", true), graded_by: "manual" }, 3);
+    state = recordPracticeAttempt(state, { ...gradedAttempt("gq_003", true), graded_by: "manual" }, 3);
+
+    expect(canConfirmMistakeMastered(state, "mistake_001")).toBe(false);
+    expect(confirmMistakeMastered(state, "mistake_001").archivedMistakeIds).not.toContain("mistake_001");
+  });
+
   it("shows only due active mistakes in review order", () => {
     const state = stateWithSamples();
     const due = getDueReviewMistakes(state, new Date("2026-05-24T00:00:00.000Z"));
@@ -258,6 +307,44 @@ describe("mobile notebook state", () => {
     ]);
     expect(restored.mistakes[0]?.original_image_uri).toMatch(/^backup:\/\//);
     expect(restored.papers[0]?.student_pdf_url).toMatch(/^backup:\/\//);
+  });
+
+  it("rewrites backup asset URIs during restore materialization", () => {
+    const state: NotebookState = {
+      ...stateWithSamples(),
+      mistakes: [{
+        ...sampleMistakes[0]!,
+        original_image_uri: "file:///tmp/original.jpg",
+        cropped_image_uri: "file:///tmp/cropped.jpg"
+      }],
+      papers: [{
+        id: "paper_001",
+        student_id: createInitialNotebookState().profile.id,
+        title: "数学复测卷",
+        filters: {
+          time_range_days: 30,
+          knowledge_points: ["一元一次方程"],
+          error_types: ["方法性错误"],
+          mastery_statuses: ["not_mastered"]
+        },
+        question_count: 1,
+        student_pdf_url: "file:///tmp/student.pdf",
+        answer_pdf_url: "file:///tmp/answer.pdf",
+        questions: [],
+        generation_manifest_url: "file:///tmp/paper-manifest.json",
+        created_at: "2026-05-30T00:00:00.000Z"
+      }]
+    };
+    const manifest = createNotebookBackupManifest(state, "2026-05-30T00:00:00.000Z");
+
+    const restored = restoreNotebookStateFromBackup(
+      serializeNotebookBackupManifest(manifest),
+      (backupPath) => `file:///restored/${backupPath}`
+    )!;
+
+    expect(restored.mistakes[0]?.original_image_uri).toBe("file:///restored/original_image/mistake_001-1.jpg");
+    expect(restored.papers[0]?.student_pdf_url).toBe("file:///restored/student_pdf/paper_001-3.pdf");
+    expect(restored.papers[0]?.generation_manifest_url).toBe("file:///restored/test_paper_manifest/paper_001-5.json");
   });
 
   it("creates a non-final local preview test paper from existing generated questions", () => {

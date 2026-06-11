@@ -30,6 +30,20 @@ describe("splitStudentAnswerFromOcr", () => {
     });
   });
 
+  it("keeps a fill-in underline in the question and moves the answer above it", () => {
+    expect(splitStudentAnswerFromOcr("18. 含有5个元素的集合共有\n31\n________\n个非空真子集")).toEqual({
+      questionText: "18. 含有5个元素的集合共有____个非空真子集",
+      studentAnswer: "31"
+    });
+  });
+
+  it("reconstructs a fill-in blank when OCR misses the underline but keeps the answer between question fragments", () => {
+    expect(splitStudentAnswerFromOcr("18. 含有5个元素的集合共有\n31\n个非空真子集")).toEqual({
+      questionText: "18. 含有5个元素的集合共有____个非空真子集",
+      studentAnswer: "31"
+    });
+  });
+
   it("moves an inline handwritten blank answer into the student answer field", () => {
     expect(splitStudentAnswerFromOcr("18. 含有5个元素的集合共有31个非空真子集")).toEqual({
       questionText: "18. 含有5个元素的集合共有____个非空真子集",

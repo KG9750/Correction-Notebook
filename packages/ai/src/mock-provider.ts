@@ -54,12 +54,19 @@ export class MockLLMProvider implements LLMProvider {
   async generatePractice(input: GeneratePracticeInput): Promise<GeneratedQuestion[]> {
     const base = input.mistake.knowledge_points[0] ?? "一元一次方程";
     const target = input.mistake.main_error_type ?? "方法性错误";
-    const templates: Array<Pick<GeneratedQuestion, "question_type" | "difficulty" | "question_text" | "answer" | "solution_steps" | "why_related_to_original_mistake">> = [
+    const templates: Array<Pick<GeneratedQuestion, "question_type" | "difficulty" | "question_text" | "choice_answer_type" | "choice_options" | "answer" | "solution_steps" | "why_related_to_original_mistake">> = [
       {
         question_type: "same_pattern",
         difficulty: "basic",
-        question_text: "一根绳子剪去 8 米后还剩 17 米，原来长多少米？请列方程解答。",
-        answer: "x = 25",
+        question_text: "一根绳子剪去 8 米后还剩 17 米，原来长多少米？",
+        choice_answer_type: "single",
+        choice_options: [
+          { label: "A", text: "9 米" },
+          { label: "B", text: "17 米" },
+          { label: "C", text: "25 米" },
+          { label: "D", text: "136 米" }
+        ],
+        answer: "C",
         solution_steps: ["设原来长 x 米。", "根据原长 - 剪去 = 剩下，列 x - 8 = 17。", "解得 x = 25。"],
         why_related_to_original_mistake: "这道题检查是否能把总量、部分量和剩余量放进正确的等量关系。"
       },
@@ -67,7 +74,14 @@ export class MockLLMProvider implements LLMProvider {
         question_type: "condition_change",
         difficulty: "standard",
         question_text: "一本书读了 35 页后，还剩全书的 3/5。全书一共有多少页？",
-        answer: "87.5 页",
+        choice_answer_type: "single",
+        choice_options: [
+          { label: "A", text: "21 页" },
+          { label: "B", text: "58.3 页" },
+          { label: "C", text: "87.5 页" },
+          { label: "D", text: "140 页" }
+        ],
+        answer: "C",
         solution_steps: ["设全书 x 页。", "已经读的页数是全书的 2/5。", "列 2x/5 = 35。", "解得 x = 87.5。"],
         why_related_to_original_mistake: "条件从具体数量变成分率，仍然考查能否找准等量关系。"
       },
@@ -75,7 +89,14 @@ export class MockLLMProvider implements LLMProvider {
         question_type: "trap",
         difficulty: "standard",
         question_text: "甲数比乙数的 2 倍少 5，甲数是 19。乙数是多少？",
-        answer: "x = 12",
+        choice_answer_type: "single",
+        choice_options: [
+          { label: "A", text: "7" },
+          { label: "B", text: "12" },
+          { label: "C", text: "24" },
+          { label: "D", text: "43" }
+        ],
+        answer: "B",
         solution_steps: ["设乙数为 x。", "甲数 = 2x - 5。", "列 2x - 5 = 19。", "解得 x = 12。"],
         why_related_to_original_mistake: "这道题容易把“少 5”写反，专门检测原来的关系方向错误是否复发。"
       },
@@ -83,7 +104,14 @@ export class MockLLMProvider implements LLMProvider {
         question_type: "number_change",
         difficulty: "standard",
         question_text: "某数的 3 倍加 4 等于 28，求这个数。",
-        answer: "x = 8",
+        choice_answer_type: "single",
+        choice_options: [
+          { label: "A", text: "6" },
+          { label: "B", text: "8" },
+          { label: "C", text: "10" },
+          { label: "D", text: "32" }
+        ],
+        answer: "B",
         solution_steps: ["设这个数为 x。", "列 3x + 4 = 28。", "解得 x = 8。"],
         why_related_to_original_mistake: "数字和情境改变，但仍然要求先把文字转成方程。"
       },
@@ -91,7 +119,14 @@ export class MockLLMProvider implements LLMProvider {
         question_type: "integrated",
         difficulty: "challenge",
         question_text: "小明买 3 支笔和 2 本本子共 31 元，每本本子 5 元。每支笔多少钱？",
-        answer: "7 元",
+        choice_answer_type: "single",
+        choice_options: [
+          { label: "A", text: "5 元" },
+          { label: "B", text: "7 元" },
+          { label: "C", text: "10 元" },
+          { label: "D", text: "12 元" }
+        ],
+        answer: "B",
         solution_steps: ["设每支笔 x 元。", "列 3x + 2 × 5 = 31。", "解得 x = 7。"],
         why_related_to_original_mistake: "综合题要求先剥离已知单价，再建立总价等量关系。"
       }
@@ -119,7 +154,7 @@ export class MockLLMProvider implements LLMProvider {
     const normalizedExpected = input.question.answer.replace(/\s+/g, "").toLowerCase();
     const normalizedActual = input.answer_text.replace(/\s+/g, "").toLowerCase();
     const inferredCorrect = normalizedActual.includes(normalizedExpected) || normalizedExpected.includes(normalizedActual);
-    const isCorrect = input.manual_is_correct ?? inferredCorrect;
+    const isCorrect = inferredCorrect;
 
     return {
       is_correct: isCorrect,
@@ -127,7 +162,7 @@ export class MockLLMProvider implements LLMProvider {
         ? "答对了。你已经能把等量关系列清楚。"
         : "这次仍然要先写等量关系，再代入数字；错误和原错因有关。",
       error_type_if_wrong: isCorrect ? null : input.question.target_error_type,
-      graded_by: input.manual_is_correct === undefined ? "ai" : "manual"
+      graded_by: "ai"
     };
   }
 

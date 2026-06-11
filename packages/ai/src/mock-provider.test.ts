@@ -32,6 +32,8 @@ describe("MockLLMProvider", () => {
 
     expect(questions).toHaveLength(3);
     expect(questions.every((question) => question.verification_status === "passed")).toBe(true);
+    expect(questions.every((question) => question.choice_answer_type === "single")).toBe(true);
+    expect(questions.every((question) => (question.choice_options?.length ?? 0) >= 4)).toBe(true);
     expect(questions.every((question) => question.answer && question.solution_steps.length > 0)).toBe(true);
     expect(questions.every((question) => question.why_related_to_original_mistake.includes("关系"))).toBe(true);
   });

@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import type { Mistake } from "@correction-notebook/shared";
-import type { ReactNode } from "react";
-import { Pressable, Text, View } from "react-native";
+import { useEffect, useRef, type ReactNode } from "react";
+import { Animated, Easing, Pressable, Text, View } from "react-native";
 import type { AppSection } from "../types";
 import { palette, styles } from "./styles";
 
@@ -75,10 +75,58 @@ export function SecondaryButton({ icon, label, onPress, disabled = false }: { ic
   );
 }
 
-export function IconButton({ icon, label, onPress }: { icon: IconName; label: string; onPress: () => void }) {
+export function IconButton({
+  icon,
+  label,
+  onPress,
+  disabled = false,
+  spinning = false
+}: {
+  icon: IconName;
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+  spinning?: boolean;
+}) {
+  const spinValue = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (!spinning) {
+      spinValue.stopAnimation();
+      spinValue.setValue(0);
+      return;
+    }
+
+    spinValue.setValue(0);
+    const animation = Animated.loop(
+      Animated.timing(spinValue, {
+        toValue: 1,
+        duration: 850,
+        easing: Easing.linear,
+        useNativeDriver: true
+      })
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [spinning, spinValue]);
+
+  const rotation = spinValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0deg", "360deg"]
+  });
+
   return (
-    <Pressable accessibilityRole="button" accessibilityLabel={label} style={styles.iconButton} onPress={onPress}>
-      <Ionicons name={icon} size={19} color={palette.ink} />
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      style={[styles.iconButton, disabled && styles.iconButtonDisabled]}
+      onPress={onPress}
+    >
+      <Animated.View style={spinning ? { transform: [{ rotate: rotation }] } : undefined}>
+        <Ionicons name={icon} size={19} color={disabled ? palette.muted : palette.ink} />
+      </Animated.View>
     </Pressable>
   );
 }
